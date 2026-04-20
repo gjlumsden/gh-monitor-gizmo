@@ -149,6 +149,16 @@ See [`secrets.yaml.example`](secrets.yaml.example) for the template.
 - `ghmonitorgizmo.yaml` sets `verify_ssl: false` because mbedTLS on
   ESP-IDF doesn't ship the GitHub CA chain by default. All GitHub
   traffic still goes over TLS; only chain verification is skipped.
+- **Wi-Fi**: the device is a 2.4 GHz-only ESP32. It needs an SSID
+  that's broadcast on 2.4 GHz (if your router advertises the same
+  SSID on both bands, that's fine), with WPA2-Personal or
+  WPA2/WPA3-mixed. WPA3-only and Enterprise (802.1X) networks are
+  **not** supported. Credentials come from the shared ESPHome
+  `wifi_ssid` / `wifi_password` in `secrets.yaml`. If the primary
+  network is unreachable at boot, the device brings up a fallback
+  access point with the SSID `GH Monitor Gizmo` and the password
+  from `ghgizmo_ap_password` – connect to it and browse to
+  `http://192.168.4.1` to reconfigure.
 - Static IP is set via the `static_ip` / `gateway` / `subnet` / `dns1`
   / `dns2` **substitutions** at the top of `ghmonitorgizmo.yaml`.
   Adjust them to match your network, or delete the `manual_ip:` block
