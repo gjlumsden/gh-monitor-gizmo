@@ -13,6 +13,12 @@ substitutions:
   #   "Europe/London"  "America/New_York"  "Asia/Tokyo"
   timezone: "Europe/London"
 
+  # --- Beeps ---
+  # Set to "false" to silence the short beep that plays each time a
+  # screensaver info card (Copilot / Contributions / PRs / CI / Rate
+  # Limit) appears. The new-event success/fail beeps are unaffected.
+  card_beep_enabled: "true"
+
   # --- Networking (static IP) ---
   # To use DHCP instead, delete the `manual_ip:` block in `wifi:` below;
   # these substitutions then become unused and can be removed.
@@ -43,7 +49,6 @@ esp32:
       CONFIG_MBEDTLS_DYNAMIC_FREE_CA_CERT: y
 
 logger:
-  level: WARN
 
 api:
   encryption:
@@ -365,6 +370,11 @@ globals:
     type: bool
     restore_value: no
     initial_value: 'false'
+  # Beep handoff for screensaver info-card flashes
+  - id: pending_card_beep
+    type: bool
+    restore_value: no
+    initial_value: 'false'
 
   # Night mode: true while inside the sleep window, cleared by the
   # apply_screen_power script. wake_frames counts down in 250ms ticks
@@ -488,9 +498,20 @@ interval:
                 }
                 id(idle_screen) = next;
                 id(screensaver_frames) = 40;    // ~10s card flash
+                id(pending_card_beep) = true;
               }
             }
           }
+      - if:
+          condition:
+            and:
+              - lambda: 'return id(pending_card_beep);'
+              - lambda: 'return ${card_beep_enabled};'
+          then:
+            - lambda: 'id(pending_card_beep) = false;'
+            - rtttl.play: "blip:d=32,o=6,b=300:c"
+          else:
+            - lambda: 'id(pending_card_beep) = false;'
 
   - interval: 60s
     startup_delay: 30s
@@ -737,8 +758,11 @@ script:
                   id(ci_running) = running;
                   id(ci_success) = succ;
                   id(ci_failed)  = fail;
+                  ESP_LOGI("github", "ci tally from events page: run=%d ok=%d fail=%d",
+                           running, succ, fail);
 
                   int count = arr.size();
+                  ESP_LOGI("github", "user events fetched: %d event(s) on page", count);
 
                   auto is_copilot = [](const char *s) -> bool {
                     if (!s) return false;
@@ -782,17 +806,38 @@ script:
                   std::vector<uint8_t> new_copilot;
                   std::vector<uint8_t> new_ci_fail;
                   int limit = first_fetch ? 1 : count;
+                  if (first_fetch) {
+                    ESP_LOGI("github", "first fetch since boot: loading only top event as proof-of-life");
+                  }
+                  int n_push = 0, n_pr = 0, n_review = 0, n_wf = 0, n_check = 0, n_issue = 0, n_other = 0;
                   for (int i = 0; i < limit; i++) {
                     JsonObject ev = arr[i].as<JsonObject>();
                     std::string evid = ev["id"] | "";
                     if (i == 0) new_top = evid;
                     if (!first_fetch && !evid.empty() && evid == old_last) break;
-                    new_lines.push_back(make_line(ev));
-                    new_detail.push_back(make_detail(ev));
-                    new_copilot.push_back(event_has_copilot(ev) ? 1 : 0);
+                    std::string line = make_line(ev);
+                    std::string detail = make_detail(ev);
+                    bool cp = event_has_copilot(ev);
                     std::string t = ev["type"] | "";
                     std::string c = ev["payload"]["workflow_run"]["conclusion"] | "";
-                    new_ci_fail.push_back((t == "WorkflowRunEvent" && c == "failure") ? 1 : 0);
+                    bool is_fail = (t == "WorkflowRunEvent" && c == "failure");
+                    if      (t == "PushEvent")                 n_push++;
+                    else if (t == "PullRequestEvent")          n_pr++;
+                    else if (t == "PullRequestReviewEvent" ||
+                             t == "PullRequestReviewCommentEvent") n_review++;
+                    else if (t == "WorkflowRunEvent")          n_wf++;
+                    else if (t == "CheckRunEvent")             n_check++;
+                    else if (t == "IssuesEvent" ||
+                             t == "IssueCommentEvent")         n_issue++;
+                    else                                        n_other++;
+                    ESP_LOGI("github",
+                             "  new event[%d]: id=%s type=%s line='%s' detail='%s' copilot=%d ci_fail=%d",
+                             i, evid.c_str(), t.c_str(), line.c_str(), detail.c_str(),
+                             cp ? 1 : 0, is_fail ? 1 : 0);
+                    new_lines.push_back(line);
+                    new_detail.push_back(detail);
+                    new_copilot.push_back(cp ? 1 : 0);
+                    new_ci_fail.push_back(is_fail ? 1 : 0);
                   }
                   if (!new_top.empty()) id(last_top_event_id) = new_top;
 
@@ -818,7 +863,13 @@ script:
                     for (auto f : new_ci_fail) if (f) { any_fail = true; break; }
                     id(pending_beep) = true;
                     id(pending_beep_fail) = any_fail;
-                    ESP_LOGD("github", "carousel loaded: %d new event(s)", n);
+                    ESP_LOGI("github",
+                             "carousel loaded: %d slide(s) [push=%d pr=%d review=%d wf=%d check=%d issue=%d other=%d] ci_fail=%d events_window=%ds",
+                             n, n_push, n_pr, n_review, n_wf, n_check, n_issue, n_other,
+                             any_fail ? 1 : 0, id(idle_frames) / 4);
+                  } else {
+                    ESP_LOGI("github", "no new events since last fetch (last_top=%s)",
+                             old_last.c_str());
                   }
               # Wake the screen if we were asleep, so the event is seen.
               - script.execute: apply_screen_power
@@ -937,7 +988,7 @@ script:
                   id(copilot_net) = net;
                   id(copilot_sku) = primary_sku;
                   id(copilot_ok) = true;
-                  ESP_LOGD("github", "copilot usage: qty=%.2f net=%.2f sku=%s",
+                  ESP_LOGI("github", "copilot usage: qty=%.2f net=%.2f sku=%s",
                            qty, net, primary_sku.c_str());
 
   # GraphQL: contributions (commits/PRs/reviews/issues) for today, this
@@ -1094,7 +1145,7 @@ script:
                   id(prs_merged_week)     = doc["data"]["merged"]["issueCount"] | 0;
                   id(prs_review_requested)= doc["data"]["review"]["issueCount"] | 0;
                   id(stats_ok) = true;
-                  ESP_LOGD("github",
+                  ESP_LOGI("github",
                            "stats: c(d/w/y)=%d/%d/%d prs(d/w/y)=%d/%d/%d open=%d merged=%d review=%d",
                            id(commits_today), id(commits_week), id(commits_year),
                            id(prs_today), id(prs_week), id(prs_year),
@@ -1179,7 +1230,7 @@ script:
                     id(rl_copilot_used) = -1;   // not exposed on this account
                   }
                   id(ratelimit_ok) = true;
-                  ESP_LOGD("github", "rate_limit: core=%d/%d copilot=%d/%d",
+                  ESP_LOGI("github", "rate_limit: core=%d/%d copilot=%d/%d",
                            id(rl_core_used), id(rl_core_limit),
                            id(rl_copilot_used), id(rl_copilot_limit));
 
@@ -1446,7 +1497,9 @@ sensor:
       if (id(bus_a)->read(0x34, buf, 2) != i2c::ERROR_OK) return NAN;
       uint16_t raw = ((uint16_t) buf[0] << 4) | (buf[1] & 0x0F);
       float v = raw * 1.1f / 1000.0f;
-      float pct = (v - 3.3f) / 0.9f * 100.0f;
+      // Map 3.00 V = 0%, 4.15 V = 100% (M5StickC Plus tops out ~4.17 V;
+      // this gives a true 100% at full charge without clipping too early).
+      float pct = (v - 3.0f) / 1.15f * 100.0f;
       if (pct < 0) pct = 0;
       if (pct > 100) pct = 100;
       return pct;
