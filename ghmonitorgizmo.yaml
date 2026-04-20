@@ -20,6 +20,10 @@ esp32:
   board: esp32dev
   framework:
     type: esp-idf
+    advanced:
+      # Bootloader supports SRAM1 as IRAM on this chip; reclaim ~40KB
+      # of code space. Silences the warning at boot.
+      sram1_as_iram: true
     sdkconfig_options:
       CONFIG_LWIP_MAX_SOCKETS: "16"
       CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN: "4096"
@@ -29,6 +33,7 @@ esp32:
       CONFIG_MBEDTLS_DYNAMIC_FREE_CA_CERT: y
 
 logger:
+  level: WARN
 
 api:
   encryption:
@@ -61,6 +66,15 @@ http_request:
   follow_redirects: true
   buffer_size_rx: 12288
   buffer_size_tx: 1024
+
+# Time: used for the rate-limit reset countdown. SNTP is fire-and-forget;
+# if the network is down the card just hides the countdown.
+time:
+  - platform: sntp
+    id: sntp_time
+    servers:
+      - "pool.ntp.org"
+      - "time.cloudflare.com"
 
 i2c:
   id: bus_a
@@ -122,6 +136,11 @@ font:
     glyphs:
       - "\U000F06A9"   # mdi:robot  (Copilot marker)
   - file: "https://github.com/Templarian/MaterialDesign-Webfont/raw/master/fonts/materialdesignicons-webfont.ttf"
+    id: mdi_copilot_big
+    size: 40
+    glyphs:
+      - "\U000F06A9"   # mdi:robot (big Copilot card icon)
+  - file: "https://github.com/Templarian/MaterialDesign-Webfont/raw/master/fonts/materialdesignicons-webfont.ttf"
     id: mdi_status
     size: 14
     glyphs:
@@ -139,6 +158,156 @@ globals:
     type: bool
     restore_value: no
     initial_value: 'false'
+
+  # Copilot usage card
+  - id: copilot_retry_pending
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: copilot_ok
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: copilot_qty
+    type: float
+    restore_value: no
+    initial_value: '0.0f'
+  - id: copilot_net
+    type: float
+    restore_value: no
+    initial_value: '0.0f'
+  - id: copilot_sku
+    type: std::string
+    restore_value: no
+    initial_value: '""'
+
+  # Permanent-disable flags. Flipped to true on the first 401/403/404 from
+  # the endpoint, and cleared only on reboot. Stops log spam / wasted
+  # requests for endpoints the current token isn't permitted to hit
+  # (e.g. billing on Enterprise unlimited).
+  - id: copilot_disabled
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: stats_disabled
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+
+  # Contributions + PR stats (from GraphQL contributionsCollection + search)
+  - id: stats_retry_pending
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: stats_ok
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: commits_today
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: commits_week
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: commits_year
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: prs_today
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: prs_week
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: prs_year
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: reviews_week
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: issues_week
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: prs_open
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: prs_merged_week
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: prs_review_requested
+    type: int
+    restore_value: no
+    initial_value: '0'
+
+  # Rate limit probe (GET /rate_limit) - free info: core budget remaining,
+  # and Copilot buckets if the account exposes them.
+  - id: ratelimit_retry_pending
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: ratelimit_ok
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: rl_core_used
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: rl_core_limit
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: rl_core_reset
+    type: uint32_t
+    restore_value: no
+    initial_value: '0'
+  - id: rl_copilot_used
+    type: int
+    restore_value: no
+    initial_value: '-1'   # -1 = bucket not exposed on this account
+  - id: rl_copilot_limit
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: rl_copilot_reset
+    type: uint32_t
+    restore_value: no
+    initial_value: '0'
+
+  # Idle screen rotation. Indices chosen at rotate-time among available cards:
+  # 0 = DVD bouncer (always available),
+  # 1 = copilot usage, 2 = contributions, 3 = PRs, 4 = CI, 5 = rate limit.
+  - id: idle_screen
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: idle_swap_frames
+    type: int
+    restore_value: no
+    initial_value: '32'   # ~8s at 250ms tick
+
+  # "Screensaver" info-card carousel. The default idle screen is the
+  # DVD bouncer. Every screensaver_cooldown ticks we start a
+  # screensaver_frames-tick window that cycles through the available
+  # info cards, then we go back to the bouncer. Event mode preempts
+  # everything and resets both counters.
+  - id: screensaver_frames
+    type: int
+    restore_value: no
+    initial_value: '0'        # 0 = bouncer; >0 = info carousel active
+  - id: screensaver_cooldown
+    type: int
+    restore_value: no
+    initial_value: '120'      # first run after ~30s idle
 
   # CI tallies from the most recent page of events
   - id: ci_running
@@ -248,6 +417,74 @@ interval:
             if (bounced) id(gh_color_idx) = (id(gh_color_idx) + 1) % 5;
           }
 
+          // Idle / screensaver carousel.
+          //   events mode    -> preempts everything; reset screensaver state
+          //   screensaver on -> rotate through available info cards
+          //   otherwise      -> DVD bouncer; tick down until next screensaver
+          if (id(idle_frames) > 0) {
+            // Events are showing; don't run the carousel, reset state so we
+            // come back to the bouncer with a fresh cooldown next time.
+            id(screensaver_frames) = 0;
+            id(screensaver_cooldown) = 1200;   // ~5 min after events end
+            id(idle_screen) = 0;
+            id(idle_swap_frames) = 32;
+          } else if (id(screensaver_frames) > 0) {
+            // Carousel active
+            id(screensaver_frames) = id(screensaver_frames) - 1;
+            if (id(idle_swap_frames) > 0) {
+              id(idle_swap_frames) = id(idle_swap_frames) - 1;
+            }
+            if (id(idle_swap_frames) == 0) {
+              // Build list of screens available right now (info cards only;
+              // the DVD bouncer runs in the "off" window, not inside the carousel).
+              int screens[8];
+              int n = 0;
+              if (id(copilot_ok))   screens[n++] = 1;
+              if (id(stats_ok))   { screens[n++] = 2; screens[n++] = 3; }  // contrib + PRs
+              if (id(ci_running) + id(ci_success) + id(ci_failed) > 0) screens[n++] = 4;
+              if (id(ratelimit_ok)) screens[n++] = 5;
+              if (n == 0) {
+                // Nothing to show - bail out of the screensaver early
+                id(screensaver_frames) = 0;
+                id(idle_screen) = 0;
+                id(screensaver_cooldown) = 1200;
+              } else {
+                int cur = id(idle_screen);
+                int next = screens[0];
+                for (int i = 0; i < n; i++) {
+                  if (screens[i] == cur) { next = screens[(i + 1) % n]; break; }
+                }
+                id(idle_screen) = next;
+                id(idle_swap_frames) = 32;     // ~8s per card
+              }
+            }
+            if (id(screensaver_frames) == 0) {
+              // Screensaver window ended - back to bouncer, start cooldown
+              id(idle_screen) = 0;
+              id(idle_swap_frames) = 32;
+              id(screensaver_cooldown) = 1200;   // ~5 min off
+            }
+          } else {
+            // Bouncer active; count down to next screensaver
+            if (id(screensaver_cooldown) > 0) {
+              id(screensaver_cooldown) = id(screensaver_cooldown) - 1;
+            }
+            if (id(screensaver_cooldown) == 0) {
+              // Only start a screensaver if at least one card is available
+              bool any = id(copilot_ok) ||
+                         id(stats_ok) || id(ratelimit_ok) ||
+                         (id(ci_running) + id(ci_success) + id(ci_failed) > 0);
+              if (any) {
+                id(screensaver_frames) = 240;   // ~60s carousel window
+                id(idle_swap_frames) = 0;       // pick first card immediately
+                id(idle_screen) = 0;            // force next-screen logic to advance
+              } else {
+                // Nothing to show yet - try again in 30s
+                id(screensaver_cooldown) = 120;
+              }
+            }
+          }
+
   - interval: 60s
     startup_delay: 30s
     then:
@@ -257,6 +494,40 @@ interval:
           then:
             - lambda: 'id(user_retry_pending) = false;'
             - script.execute: fetch_user_events
+
+  - interval: 600s
+    startup_delay: 45s
+    then:
+      - if:
+          condition:
+            and:
+              - wifi.connected:
+              - lambda: 'return !id(copilot_disabled);'
+          then:
+            - lambda: 'id(copilot_retry_pending) = false;'
+            - script.execute: fetch_copilot_usage
+
+  - interval: 600s
+    startup_delay: 60s
+    then:
+      - if:
+          condition:
+            and:
+              - wifi.connected:
+              - lambda: 'return !id(stats_disabled);'
+          then:
+            - lambda: 'id(stats_retry_pending) = false;'
+            - script.execute: fetch_stats_graphql
+
+  - interval: 600s
+    startup_delay: 90s
+    then:
+      - if:
+          condition:
+            wifi.connected:
+          then:
+            - lambda: 'id(ratelimit_retry_pending) = false;'
+            - script.execute: fetch_rate_limit
 
 script:
   - id: fetch_user_events
@@ -280,14 +551,14 @@ script:
                   - lambda: 'id(user_retry_pending) = true;'
                   - logger.log:
                       format: "user events fetch failed, retrying in 10s"
-                      level: DEBUG
+                      level: WARN
                       tag: "github"
                   - delay: 10s
                   - script.execute: fetch_user_events
                 else:
                   - logger.log:
                       format: "user events fetch failed (offline or retry exhausted), waiting for next cycle"
-                      level: DEBUG
+                      level: WARN
                       tag: "github"
           on_response:
             then:
@@ -518,6 +789,354 @@ script:
                     - lambda: 'id(pending_beep) = false;'
                     - rtttl.play: "ping:d=16,o=6,b=300:e,g"
 
+  # Copilot usage for the authenticated user. Pulls the current billing
+  # cycle's usage items and sums anything where product == "Copilot".
+  # Requires a fine-grained PAT with "Plan: read-only" (billing) access.
+  - id: fetch_copilot_usage
+    mode: restart
+    then:
+      - http_request.get:
+          url: "https://api.github.com/users/${github_user}/settings/billing/usage"
+          max_response_buffer_size: 16384
+          request_headers:
+            Authorization: "Bearer ${github_token}"
+            Accept: "application/vnd.github+json"
+            X-GitHub-Api-Version: "2022-11-28"
+          capture_response: true
+          on_error:
+            - if:
+                condition:
+                  and:
+                    - lambda: 'return !id(copilot_retry_pending);'
+                    - wifi.connected:
+                then:
+                  - lambda: 'id(copilot_retry_pending) = true;'
+                  - logger.log:
+                      format: "copilot usage fetch failed, retrying in 30s"
+                      level: WARN
+                      tag: "github"
+                  - delay: 30s
+                  - script.execute: fetch_copilot_usage
+                else:
+                  - logger.log:
+                      format: "copilot usage fetch failed (offline or retry exhausted), waiting for next cycle"
+                      level: WARN
+                      tag: "github"
+          on_response:
+            then:
+              - lambda: 'id(copilot_retry_pending) = false;'
+              - lambda: |-
+                  int sc = response->status_code;
+                  if (sc != 200) {
+                    ESP_LOGW("github", "copilot usage HTTP %d", sc);
+                    if (sc == 401 || sc == 403 || sc == 404) {
+                      id(copilot_disabled) = true;
+                      ESP_LOGW("github", "copilot usage disabled until reboot (token missing Plan:RO?)");
+                    }
+                    return;
+                  }
+                  // Filter - keep only the fields we sum over.
+                  JsonDocument filter;
+                  filter["usageItems"][0]["product"] = true;
+                  filter["usageItems"][0]["sku"] = true;
+                  filter["usageItems"][0]["quantity"] = true;
+                  filter["usageItems"][0]["netAmount"] = true;
+                  filter["usageItems"][0]["unitType"] = true;
+
+                  JsonDocument doc;
+                  DeserializationError err = deserializeJson(doc, body,
+                      DeserializationOption::Filter(filter));
+                  if (err) {
+                    ESP_LOGW("github", "copilot usage parse failed: %s", err.c_str());
+                    return;
+                  }
+                  JsonArray items = doc["usageItems"].as<JsonArray>();
+                  if (items.isNull()) {
+                    // Some accounts return an empty response; treat as zero usage.
+                    id(copilot_qty) = 0.0f;
+                    id(copilot_net) = 0.0f;
+                    id(copilot_sku) = "";
+                    id(copilot_ok) = true;
+                    ESP_LOGD("github", "copilot usage: no items");
+                    return;
+                  }
+
+                  float qty = 0.0f;
+                  float net = 0.0f;
+                  std::string primary_sku;
+                  int primary_count = 0;
+                  for (JsonObject it : items) {
+                    std::string product = it["product"] | "";
+                    // Case-insensitive match on "copilot"
+                    std::string p = product;
+                    for (auto &c : p) c = std::tolower(c);
+                    if (p.find("copilot") == std::string::npos) continue;
+                    float q = it["quantity"] | 0.0f;
+                    float n = it["netAmount"] | 0.0f;
+                    qty += q;
+                    net += n;
+                    std::string sku = it["sku"] | "";
+                    if (!sku.empty() && (primary_sku.empty() || q > primary_count)) {
+                      primary_sku = sku;
+                      primary_count = (int) q;
+                    }
+                  }
+                  // Shorten SKU for display (e.g. strip leading "Copilot ")
+                  if (primary_sku.rfind("Copilot ", 0) == 0) {
+                    primary_sku = primary_sku.substr(8);
+                  }
+                  if (primary_sku.size() > 22) primary_sku = primary_sku.substr(0, 22);
+
+                  id(copilot_qty) = qty;
+                  id(copilot_net) = net;
+                  id(copilot_sku) = primary_sku;
+                  id(copilot_ok) = true;
+                  ESP_LOGD("github", "copilot usage: qty=%.2f net=%.2f sku=%s",
+                           qty, net, primary_sku.c_str());
+
+  # GraphQL: contributions (commits/PRs/reviews/issues) for today, this
+  # week and this year, plus PR counts via aliased search. A single
+  # request returns everything we need for the Contributions and PRs
+  # cards. Private repos are counted only if the token has Contents:RO
+  # on them AND "Include private contributions on my profile" is on.
+  - id: fetch_stats_graphql
+    mode: restart
+    then:
+      - http_request.post:
+          url: "https://api.github.com/graphql"
+          max_response_buffer_size: 8192
+          request_headers:
+            Authorization: "Bearer ${github_token}"
+            Accept: "application/vnd.github+json"
+            Content-Type: "application/json"
+          # The GraphQL query uses variables $user, $dayStart, $weekStart,
+          # $yearStart. Dates are injected at request time as UTC ISO8601
+          # midnight. We let the device's current time drive the windows.
+          body: !lambda |-
+            auto pad2 = [](int v) {
+              char b[4]; snprintf(b, sizeof(b), "%02d", v); return std::string(b);
+            };
+            auto now = id(sntp_time).now();
+            std::string day_start, week_start, year_start;
+            std::string merged_week, open_q, review_q;
+            if (now.is_valid()) {
+              char ybuf[8]; snprintf(ybuf, sizeof(ybuf), "%04d", now.year);
+              day_start  = std::string(ybuf) + "-" + pad2(now.month) + "-" + pad2(now.day_of_month) + "T00:00:00Z";
+              // Week starts Monday (UTC)
+              int dow = now.day_of_week;  // 1=Sun..7=Sat (ESPHome convention)
+              int back = (dow == 1) ? 6 : (dow - 2);
+              // Subtract `back` days by working in epoch seconds
+              time_t t = now.timestamp - (back * 86400) -
+                         (now.hour * 3600 + now.minute * 60 + now.second);
+              struct tm wt; gmtime_r(&t, &wt);
+              char wb[24]; snprintf(wb, sizeof(wb), "%04d-%02d-%02dT00:00:00Z",
+                                    wt.tm_year + 1900, wt.tm_mon + 1, wt.tm_mday);
+              week_start = wb;
+              year_start = std::string(ybuf) + "-01-01T00:00:00Z";
+              // Also compute a YYYY-MM-DD for search (merged:>=)
+              char mb[16]; snprintf(mb, sizeof(mb), "%04d-%02d-%02d",
+                                    wt.tm_year + 1900, wt.tm_mon + 1, wt.tm_mday);
+              merged_week = std::string("is:pr author:") + "${github_user}" +
+                            " is:merged merged:>=" + mb;
+            } else {
+              // No clock yet - fall back to the start of the Unix year.
+              // GraphQL will still accept the window; counts will just be
+              // "since boot with no clock" which is fine as a once-off.
+              day_start = "2026-01-01T00:00:00Z";
+              week_start = "2026-01-01T00:00:00Z";
+              year_start = "2026-01-01T00:00:00Z";
+              merged_week = std::string("is:pr author:") + "${github_user}" + " is:merged";
+            }
+            open_q  = std::string("is:pr author:") + "${github_user}" + " is:open";
+            review_q = std::string("is:pr review-requested:") + "${github_user}" + " is:open";
+
+            std::string q =
+              "query($user:String!, $dayStart:DateTime!, $weekStart:DateTime!, $yearStart:DateTime!, $mergedWeek:String!, $openQ:String!, $reviewQ:String!) {"
+              "  today: user(login:$user){ contributionsCollection(from:$dayStart){ totalCommitContributions totalPullRequestContributions totalPullRequestReviewContributions totalIssueContributions } }"
+              "  week:  user(login:$user){ contributionsCollection(from:$weekStart){ totalCommitContributions totalPullRequestContributions totalPullRequestReviewContributions totalIssueContributions } }"
+              "  year:  user(login:$user){ contributionsCollection(from:$yearStart){ totalCommitContributions totalPullRequestContributions } }"
+              "  merged:  search(query:$mergedWeek, type:ISSUE){ issueCount }"
+              "  open:    search(query:$openQ,     type:ISSUE){ issueCount }"
+              "  review:  search(query:$reviewQ,   type:ISSUE){ issueCount }"
+              "}";
+
+            // Manual JSON build (avoids a second parse). Values are user
+            // names and ISO dates so no escaping needed.
+            std::string body;
+            body.reserve(1024);
+            body += "{\"query\":\"";
+            // Escape the quotes in q
+            for (char c : q) { if (c == '"') body += "\\\""; else body += c; }
+            body += "\",\"variables\":{";
+            body += "\"user\":\"${github_user}\",";
+            body += "\"dayStart\":\"" + day_start + "\",";
+            body += "\"weekStart\":\"" + week_start + "\",";
+            body += "\"yearStart\":\"" + year_start + "\",";
+            body += "\"mergedWeek\":\"" + merged_week + "\",";
+            body += "\"openQ\":\"" + open_q + "\",";
+            body += "\"reviewQ\":\"" + review_q + "\"";
+            body += "}}";
+            return body;
+          capture_response: true
+          on_error:
+            - if:
+                condition:
+                  and:
+                    - lambda: 'return !id(stats_retry_pending);'
+                    - wifi.connected:
+                then:
+                  - lambda: 'id(stats_retry_pending) = true;'
+                  - logger.log:
+                      format: "stats graphql fetch failed, retrying in 30s"
+                      level: WARN
+                      tag: "github"
+                  - delay: 30s
+                  - script.execute: fetch_stats_graphql
+                else:
+                  - logger.log:
+                      format: "stats graphql fetch failed (offline or retry exhausted), waiting for next cycle"
+                      level: WARN
+                      tag: "github"
+          on_response:
+            then:
+              - lambda: 'id(stats_retry_pending) = false;'
+              - lambda: |-
+                  int sc = response->status_code;
+                  if (sc != 200) {
+                    ESP_LOGW("github", "stats graphql HTTP %d", sc);
+                    if (sc == 401 || sc == 403 || sc == 404) {
+                      id(stats_disabled) = true;
+                      ESP_LOGW("github", "stats disabled until reboot (token rejected)");
+                    }
+                    return;
+                  }
+                  JsonDocument filter;
+                  filter["data"]["today"]["contributionsCollection"]["totalCommitContributions"] = true;
+                  filter["data"]["today"]["contributionsCollection"]["totalPullRequestContributions"] = true;
+                  filter["data"]["today"]["contributionsCollection"]["totalPullRequestReviewContributions"] = true;
+                  filter["data"]["today"]["contributionsCollection"]["totalIssueContributions"] = true;
+                  filter["data"]["week"]["contributionsCollection"]["totalCommitContributions"] = true;
+                  filter["data"]["week"]["contributionsCollection"]["totalPullRequestContributions"] = true;
+                  filter["data"]["week"]["contributionsCollection"]["totalPullRequestReviewContributions"] = true;
+                  filter["data"]["week"]["contributionsCollection"]["totalIssueContributions"] = true;
+                  filter["data"]["year"]["contributionsCollection"]["totalCommitContributions"] = true;
+                  filter["data"]["year"]["contributionsCollection"]["totalPullRequestContributions"] = true;
+                  filter["data"]["merged"]["issueCount"] = true;
+                  filter["data"]["open"]["issueCount"] = true;
+                  filter["data"]["review"]["issueCount"] = true;
+
+                  JsonDocument doc;
+                  DeserializationError err = deserializeJson(doc, body,
+                      DeserializationOption::Filter(filter));
+                  if (err) {
+                    ESP_LOGW("github", "stats graphql parse failed: %s", err.c_str());
+                    return;
+                  }
+                  auto t = doc["data"]["today"]["contributionsCollection"];
+                  auto w = doc["data"]["week"]["contributionsCollection"];
+                  auto y = doc["data"]["year"]["contributionsCollection"];
+
+                  id(commits_today) = t["totalCommitContributions"] | 0;
+                  id(commits_week)  = w["totalCommitContributions"] | 0;
+                  id(commits_year) = y["totalCommitContributions"] | 0;
+                  id(prs_today)    = t["totalPullRequestContributions"] | 0;
+                  id(prs_week)     = w["totalPullRequestContributions"] | 0;
+                  id(prs_year)     = y["totalPullRequestContributions"] | 0;
+                  id(reviews_week) = w["totalPullRequestReviewContributions"] | 0;
+                  id(issues_week)  = w["totalIssueContributions"] | 0;
+                  id(prs_open)            = doc["data"]["open"]["issueCount"] | 0;
+                  id(prs_merged_week)     = doc["data"]["merged"]["issueCount"] | 0;
+                  id(prs_review_requested)= doc["data"]["review"]["issueCount"] | 0;
+                  id(stats_ok) = true;
+                  ESP_LOGD("github",
+                           "stats: c(d/w/y)=%d/%d/%d prs(d/w/y)=%d/%d/%d open=%d merged=%d review=%d",
+                           id(commits_today), id(commits_week), id(commits_year),
+                           id(prs_today), id(prs_week), id(prs_year),
+                           id(prs_open), id(prs_merged_week), id(prs_review_requested));
+
+  # /rate_limit - free info: core API budget + any Copilot rate buckets
+  # the account exposes. The copilot bucket only appears for accounts
+  # where GitHub gates Copilot requests per-user.
+  - id: fetch_rate_limit
+    mode: restart
+    then:
+      - http_request.get:
+          url: "https://api.github.com/rate_limit"
+          max_response_buffer_size: 4096
+          request_headers:
+            Authorization: "Bearer ${github_token}"
+            Accept: "application/vnd.github+json"
+            X-GitHub-Api-Version: "2022-11-28"
+          capture_response: true
+          on_error:
+            - if:
+                condition:
+                  and:
+                    - lambda: 'return !id(ratelimit_retry_pending);'
+                    - wifi.connected:
+                then:
+                  - lambda: 'id(ratelimit_retry_pending) = true;'
+                  - logger.log:
+                      format: "rate_limit fetch failed, retrying in 30s"
+                      level: WARN
+                      tag: "github"
+                  - delay: 30s
+                  - script.execute: fetch_rate_limit
+                else:
+                  - logger.log:
+                      format: "rate_limit fetch failed (offline or retry exhausted), waiting for next cycle"
+                      level: WARN
+                      tag: "github"
+          on_response:
+            then:
+              - lambda: 'id(ratelimit_retry_pending) = false;'
+              - lambda: |-
+                  if (response->status_code != 200) {
+                    ESP_LOGW("github", "rate_limit HTTP %d", response->status_code);
+                    return;
+                  }
+                  JsonDocument filter;
+                  filter["resources"]["core"]["used"] = true;
+                  filter["resources"]["core"]["limit"] = true;
+                  filter["resources"]["core"]["reset"] = true;
+                  filter["resources"]["copilot"]["used"] = true;
+                  filter["resources"]["copilot"]["limit"] = true;
+                  filter["resources"]["copilot"]["reset"] = true;
+                  filter["resources"]["copilot_chat"]["used"] = true;
+                  filter["resources"]["copilot_chat"]["limit"] = true;
+                  filter["resources"]["copilot_chat"]["reset"] = true;
+
+                  JsonDocument doc;
+                  DeserializationError err = deserializeJson(doc, body,
+                      DeserializationOption::Filter(filter));
+                  if (err) {
+                    ESP_LOGW("github", "rate_limit parse failed: %s", err.c_str());
+                    return;
+                  }
+                  JsonObject res = doc["resources"].as<JsonObject>();
+                  if (res.isNull()) return;
+
+                  id(rl_core_used)  = res["core"]["used"]  | 0;
+                  id(rl_core_limit) = res["core"]["limit"] | 0;
+                  id(rl_core_reset) = res["core"]["reset"] | 0;
+
+                  // Prefer the `copilot` bucket; fall back to `copilot_chat`.
+                  if (!res["copilot"].isNull()) {
+                    id(rl_copilot_used)  = res["copilot"]["used"]  | 0;
+                    id(rl_copilot_limit) = res["copilot"]["limit"] | 0;
+                    id(rl_copilot_reset) = res["copilot"]["reset"] | 0;
+                  } else if (!res["copilot_chat"].isNull()) {
+                    id(rl_copilot_used)  = res["copilot_chat"]["used"]  | 0;
+                    id(rl_copilot_limit) = res["copilot_chat"]["limit"] | 0;
+                    id(rl_copilot_reset) = res["copilot_chat"]["reset"] | 0;
+                  } else {
+                    id(rl_copilot_used) = -1;   // not exposed on this account
+                  }
+                  id(ratelimit_ok) = true;
+                  ESP_LOGD("github", "rate_limit: core=%d/%d copilot=%d/%d",
+                           id(rl_core_used), id(rl_core_limit),
+                           id(rl_copilot_used), id(rl_copilot_limit));
+
 spi:
   clk_pin: GPIO13
   mosi_pin: GPIO15
@@ -612,6 +1231,142 @@ display:
         for (int i = 0; i < n; i++) {
           Color dc = (i == idx) ? Color(220, 230, 255) : Color(60, 80, 100);
           it.filled_circle(first_x + i * spacing, dots_y, 2, dc);
+        }
+      } else if (id(screensaver_frames) > 0 && id(idle_screen) == 1 && id(copilot_ok)) {
+        // --- Copilot usage card ---
+        int cx = W / 2;
+        // Big Copilot icon, left of the number
+        it.print(14, 30, id(mdi_copilot_big), Color(180, 140, 255), "\U000F06A9");
+        // Title
+        it.print(cx + 12, 34, id(font_med), Color(200, 170, 255),
+                 TextAlign::TOP_CENTER, "Copilot");
+        // Big quantity
+        {
+          char qbuf[24];
+          float q = id(copilot_qty);
+          if (q >= 1000.0f) sprintf(qbuf, "%.1fk", q / 1000.0f);
+          else if (q == (int) q) sprintf(qbuf, "%d", (int) q);
+          else sprintf(qbuf, "%.1f", q);
+          it.print(cx + 12, 58, id(font_big), Color(220, 200, 255),
+                   TextAlign::TOP_CENTER, qbuf);
+        }
+        // SKU / unit subtitle
+        {
+          const std::string &sku = id(copilot_sku);
+          const char *sub = sku.empty() ? "requests this cycle" : sku.c_str();
+          it.print(cx, 92, id(font_small), Color(180, 180, 210),
+                   TextAlign::TOP_CENTER, sub);
+        }
+        // Net $ amount, bottom-right
+        if (id(copilot_net) > 0.0f) {
+          char nbuf[16];
+          sprintf(nbuf, "$%.2f", id(copilot_net));
+          it.print(W - 4, H - 4, id(font_small), Color(140, 255, 160),
+                   TextAlign::BASELINE_RIGHT, nbuf);
+        }
+      } else if (id(screensaver_frames) > 0 && id(idle_screen) == 2 && id(stats_ok)) {
+        // --- Contributions card (commits / PRs over today / week / year) ---
+        int cx = W / 2;
+        it.print(cx, 28, id(font_med), Color(180, 220, 255),
+                 TextAlign::TOP_CENTER, "Contributions");
+        // 3-column mini-table: TODAY / WEEK / YEAR, rows: commits, PRs
+        const int col_w = (W - 8) / 3;
+        const int base_x = 4;
+        const char *heads[3] = { "TODAY", "WEEK", "YEAR" };
+        int commits[3] = { id(commits_today), id(commits_week), id(commits_year) };
+        int prs[3]     = { id(prs_today),     id(prs_week),     id(prs_year) };
+        for (int i = 0; i < 3; i++) {
+          int cx_col = base_x + col_w * i + col_w / 2;
+          it.print(cx_col, 50, id(font_small), Color(160, 160, 190),
+                   TextAlign::TOP_CENTER, heads[i]);
+          char b[12];
+          sprintf(b, "%d", commits[i]);
+          it.print(cx_col, 66, id(font_med), Color(140, 255, 160),
+                   TextAlign::TOP_CENTER, b);
+          sprintf(b, "%d", prs[i]);
+          it.print(cx_col, 90, id(font_med), Color(200, 170, 255),
+                   TextAlign::TOP_CENTER, b);
+        }
+        it.print(4,  H - 4, id(font_small), Color(140, 255, 160),
+                 TextAlign::BASELINE_LEFT, "commits");
+        it.print(W - 4, H - 4, id(font_small), Color(200, 170, 255),
+                 TextAlign::BASELINE_RIGHT, "PRs");
+      } else if (id(screensaver_frames) > 0 && id(idle_screen) == 3 && id(stats_ok)) {
+        // --- PR status card ---
+        int cx = W / 2;
+        it.print(cx, 28, id(font_med), Color(200, 170, 255),
+                 TextAlign::TOP_CENTER, "Pull Requests");
+        // Big number: open PRs authored by you
+        {
+          char buf[12];
+          sprintf(buf, "%d", id(prs_open));
+          it.print(cx, 50, id(font_big), Color(220, 220, 255),
+                   TextAlign::TOP_CENTER, buf);
+          it.print(cx, 82, id(font_small), Color(180, 180, 210),
+                   TextAlign::TOP_CENTER, "open");
+        }
+        // Bottom row: merged this week | review requested on you
+        {
+          char buf[40];
+          sprintf(buf, "%d merged wk", id(prs_merged_week));
+          it.print(4, H - 4, id(font_small), Color(140, 255, 160),
+                   TextAlign::BASELINE_LEFT, buf);
+          sprintf(buf, "%d to review", id(prs_review_requested));
+          it.print(W - 4, H - 4, id(font_small), Color(255, 220, 120),
+                   TextAlign::BASELINE_RIGHT, buf);
+        }
+      } else if (id(screensaver_frames) > 0 && id(idle_screen) == 4) {
+        // --- CI summary card (from the most recent events page) ---
+        int cx = W / 2;
+        it.print(cx, 28, id(font_med), Color(180, 220, 255),
+                 TextAlign::TOP_CENTER, "CI (recent)");
+        const int col_w = (W - 8) / 3;
+        const int base_x = 4;
+        const char *heads[3] = { "RUN", "OK", "FAIL" };
+        int vals[3]          = { id(ci_running), id(ci_success), id(ci_failed) };
+        Color colors[3]      = { Color(255, 220, 120), Color(140, 255, 160), Color(255, 120, 120) };
+        for (int i = 0; i < 3; i++) {
+          int cx_col = base_x + col_w * i + col_w / 2;
+          it.print(cx_col, 50, id(font_small), colors[i],
+                   TextAlign::TOP_CENTER, heads[i]);
+          char b[12];
+          sprintf(b, "%d", vals[i]);
+          it.print(cx_col, 66, id(font_big), colors[i],
+                   TextAlign::TOP_CENTER, b);
+        }
+        it.print(cx, H - 4, id(font_small), Color(140, 140, 170),
+                 TextAlign::BASELINE_CENTER, "last ~30 events");
+      } else if (id(screensaver_frames) > 0 && id(idle_screen) == 5 && id(ratelimit_ok)) {
+        // --- API rate-limit card ---
+        int cx = W / 2;
+        it.print(cx, 28, id(font_med), Color(180, 220, 255),
+                 TextAlign::TOP_CENTER, "API Rate Limit");
+        {
+          char buf[32];
+          sprintf(buf, "%d / %d", id(rl_core_used), id(rl_core_limit));
+          it.print(cx, 48, id(font_big), Color(220, 220, 255),
+                   TextAlign::TOP_CENTER, buf);
+          it.print(cx, 80, id(font_small), Color(180, 180, 210),
+                   TextAlign::TOP_CENTER, "core used / hour");
+        }
+        // Copilot bucket if exposed
+        if (id(rl_copilot_used) >= 0) {
+          char buf[40];
+          sprintf(buf, "copilot %d/%d", id(rl_copilot_used), id(rl_copilot_limit));
+          it.print(cx, H - 4, id(font_small), Color(200, 170, 255),
+                   TextAlign::BASELINE_CENTER, buf);
+        } else {
+          // Show reset time instead
+          uint32_t reset = id(rl_core_reset);
+          auto now = id(sntp_time).now();
+          if (reset > 0 && now.is_valid() && reset > (uint32_t) now.timestamp) {
+            uint32_t dt = reset - now.timestamp;
+            char buf[32];
+            if (dt < 3600) snprintf(buf, sizeof(buf), "resets in %um", dt / 60);
+            else           snprintf(buf, sizeof(buf), "resets in %uh", dt / 3600);
+            it.print(cx, H - 4, id(font_small), Color(140, 140, 170),
+                     TextAlign::BASELINE_CENTER, buf);
+          }
         }
       } else {
         // DVD-bouncer github logo

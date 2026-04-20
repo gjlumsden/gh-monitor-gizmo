@@ -36,6 +36,25 @@ battery %.
   a CI failure.
 - **Idle DVD-bouncer** – the GitHub logo bounces around the screen
   and cycles colour on each wall hit.
+- **Copilot usage card** – every 10 minutes the gizmo pulls your
+  current-billing-cycle Copilot usage from GitHub. Requires a token
+  with billing read access (see
+  [`secrets.yaml.example`](secrets.yaml.example)).
+- **Contributions card** – commits and PRs for today, this week and
+  this year, via a single GraphQL query against
+  `contributionsCollection`. Needs `Contents: Read-only` for private
+  repos to count.
+- **Pull-request card** – PRs you have open, merged this week, and
+  review-requested on you, from GitHub search.
+- **API rate-limit card** – remaining hourly budget on the REST core
+  bucket, plus the Copilot bucket when the account exposes it.
+- **Screensaver carousel** – while idle (no new events), the DVD
+  bouncer runs for ~5 minutes, then a ~1-minute carousel of the
+  enabled cards above plays, then back to the bouncer. Live events
+  always preempt the screensaver.
+- **Graceful degradation** – any card whose permission is missing is
+  silently disabled the first time it gets a 401/403/404 and stays
+  off until reboot; nothing is retried or log-spammed.
 - **Battery %** – read from the on-board AXP192 PMIC over I²C and
   exposed to Home Assistant as a sensor.
 
@@ -113,17 +132,26 @@ Full CLI docs: <https://esphome.io/guides/getting_started_command_line>
 
 ## Creating a GitHub token
 
-The device polls `GET /users/{user}/events`. That endpoint works with:
+The device always polls `GET /users/{user}/events` for the events
+carousel. Optional extra cards each want their own fine-grained
+permission; anything the token can't read is silently disabled the
+first time it fails, so you can start with the minimum and add later.
 
-- **Fine-grained PAT**: `Metadata: Read-only` is sufficient for your
-  own public events (and is granted to every fine-grained PAT by
-  default); add repo-level access for private-repo events.
-- **Classic PAT**: no scopes needed for public events; add `repo` to
-  see private repo activity.
+| Card                          | Fine-grained permission        | Classic scope            |
+|-------------------------------|--------------------------------|--------------------------|
+| Events carousel + CI tally    | Metadata: Read-only (default)  | (public) or `repo`       |
+| Private-repo events + stats   | Contents: Read-only            | `repo`                   |
+| Copilot usage (billing)       | Plan: Read-only                | `manage_billing:copilot` |
+| Contributions + PR stats      | Contents: Read-only            | `repo`, `read:user`      |
+| API rate-limit card           | (any token)                    | (any)                    |
 
-Create one at <https://github.com/settings/tokens>. Put it in
-`secrets.yaml` as `ghgizmo_github_token`. The device only uses it to
-raise the rate limit; it's sent over HTTPS to `api.github.com`.
+For private contributions to show up in the Contributions / PR cards,
+also enable **"Include private contributions on my profile"** under
+<https://github.com/settings/profile>.
+
+Create a token at <https://github.com/settings/tokens>. Put it in
+`secrets.yaml` as `ghgizmo_github_token`. It's sent over HTTPS only to
+`api.github.com`.
 
 ## secrets.yaml
 
