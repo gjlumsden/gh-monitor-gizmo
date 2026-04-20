@@ -796,10 +796,10 @@ script:
                     long secs = (long) now.timestamp - (long) ev_t;
                     if (secs < 0) secs = 0;
                     char b[16];
-                    if (secs < 90)            snprintf(b, sizeof(b), " %lds", secs);
-                    else if (secs < 90 * 60)  snprintf(b, sizeof(b), " %ldm", secs / 60);
-                    else if (secs < 48 * 3600) snprintf(b, sizeof(b), " %ldh", secs / 3600);
-                    else                      snprintf(b, sizeof(b), " %ldd", secs / 86400);
+                    if (secs < 90)            snprintf(b, sizeof(b), " %lds ago", secs);
+                    else if (secs < 90 * 60)  snprintf(b, sizeof(b), " %ldm ago", secs / 60);
+                    else if (secs < 48 * 3600) snprintf(b, sizeof(b), " %ldh ago", secs / 3600);
+                    else                      snprintf(b, sizeof(b), " %ldd ago", secs / 86400);
                     return std::string(b);
                   };
 
