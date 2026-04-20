@@ -69,25 +69,21 @@ flash and subsequent OTA updates.
      working USB toolchain.
    - Writes a default **API encryption key** and **AP password** into
      Home Assistant's `/config/esphome/secrets.yaml`.
-3. Delete the auto-generated device from the ESPHome dashboard (the
-   tile's three-dot menu → Delete) – we're going to replace the YAML.
-4. Open your Home Assistant `/config/esphome/` folder (via the
+3. Open your Home Assistant `/config/esphome/secrets.yaml` (via the
    [File editor add-on][ha-fileeditor], the
    [Samba share add-on][ha-samba], or
-   [Studio Code Server][ha-vscode]):
-   - Copy [`ghmonitorgizmo.yaml`](ghmonitorgizmo.yaml) from this repo
-     into `/config/esphome/`.
-   - Open the existing `/config/esphome/secrets.yaml`. If it contains
-     keys named `api_encryption_key` and `ap_password` (or
-     `<devicename>_api_encryption_key` / `<devicename>_ap_password`)
-     that were auto-added by the ESPHome Builder on the previous step,
-     either rename them to `ghgizmo_api_encryption_key` and
-     `ghgizmo_ap_password`, or copy their values across. Then add the
-     remaining GitHub and OTA keys from
-     [`secrets.yaml.example`](secrets.yaml.example).
-5. Back in the ESPHome dashboard, the new `ghmonitorgizmo` tile
-   should now appear. Click **INSTALL → Plug into the computer running
-   ESPHome Dashboard** for the first flash. All subsequent installs
+   [Studio Code Server][ha-vscode]). The ESPHome Builder will have
+   added entries for the new device &mdash; either named plainly
+   (`api_encryption_key`, `ap_password`) or prefixed with the device
+   name. Leave them in place and **add** `ghgizmo_*` entries alongside,
+   copying the generated values across. Use
+   [`secrets.yaml.example`](secrets.yaml.example) as a template for
+   the remaining Wi-Fi, GitHub, and OTA keys.
+4. Back in the ESPHome dashboard, click **EDIT** on the tile you just
+   created and replace the entire contents with
+   [`ghmonitorgizmo.yaml`](ghmonitorgizmo.yaml) from this repo. Save.
+5. Click **INSTALL → Plug into the computer running ESPHome Dashboard**
+   for the first flash. All subsequent installs
    can use **Wirelessly**.
 
 After install, the device auto-discovers as a new ESPHome integration
