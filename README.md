@@ -149,9 +149,10 @@ See [`secrets.yaml.example`](secrets.yaml.example) for the template.
 - `ghmonitorgizmo.yaml` sets `verify_ssl: false` because mbedTLS on
   ESP-IDF doesn't ship the GitHub CA chain by default. All GitHub
   traffic still goes over TLS; only chain verification is skipped.
-- Static IP is configured in the `wifi:` block – adjust `static_ip`,
-  `gateway`, and DNS to match your network, or remove the `manual_ip:`
-  block entirely to use DHCP.
+- Static IP is set via the `static_ip` / `gateway` / `subnet` / `dns1`
+  / `dns2` **substitutions** at the top of `ghmonitorgizmo.yaml`.
+  Adjust them to match your network, or delete the `manual_ip:` block
+  under `wifi:` entirely to use DHCP instead.
 - Poll interval is 90 s with a 30 s startup delay. Tune via the
   `interval:` block; mind the GitHub 5000 req/hr user rate limit.
 - Memory tuning lives in `esp32.framework.sdkconfig_options`. Do **not**
