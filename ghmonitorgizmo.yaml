@@ -3,6 +3,16 @@ substitutions:
   github_user: !secret ghgizmo_github_user
   github_token: !secret ghgizmo_github_token
 
+  # --- Night mode ---
+  # Screen (backlight) is turned off between sleep_start_hour and
+  # sleep_end_hour, local time. Button A wakes the screen for 15 s.
+  # Set both values to the same number (e.g. 0) to disable night mode.
+  sleep_start_hour: "20"   # off at 20:00
+  sleep_end_hour:   "8"    # on  at 08:00
+  # IANA timezone for the local-hour comparison above. Examples:
+  #   "Europe/London"  "America/New_York"  "Asia/Tokyo"
+  timezone: "Europe/London"
+
   # --- Networking (static IP) ---
   # To use DHCP instead, delete the `manual_ip:` block in `wifi:` below;
   # these substitutions then become unused and can be removed.
@@ -72,6 +82,7 @@ http_request:
 time:
   - platform: sntp
     id: sntp_time
+    timezone: ${timezone}
     servers:
       - "pool.ntp.org"
       - "time.cloudflare.com"
@@ -112,6 +123,9 @@ binary_sensor:
             id(carousel_detail).clear();
             id(carousel_idx) = 0;
             id(carousel_frames) = 0;
+            // Wake the screen for ~15 s if we're in night mode
+            id(wake_frames) = 60;
+        - script.execute: apply_screen_power
 
 # --- FONTS ---
 font:
@@ -283,31 +297,29 @@ globals:
     restore_value: no
     initial_value: '0'
 
-  # Idle screen rotation. Indices chosen at rotate-time among available cards:
+  # Idle screen selection. The DVD bouncer (index 0) is the default;
+  # every ~60s we flash one info card for ~10s and then return to the
+  # bouncer. Index chosen at flash time among available cards:
   # 0 = DVD bouncer (always available),
   # 1 = copilot usage, 2 = contributions, 3 = PRs, 4 = CI, 5 = rate limit.
   - id: idle_screen
     type: int
     restore_value: no
     initial_value: '0'
-  - id: idle_swap_frames
-    type: int
-    restore_value: no
-    initial_value: '32'   # ~8s at 250ms tick
 
-  # "Screensaver" info-card carousel. The default idle screen is the
-  # DVD bouncer. Every screensaver_cooldown ticks we start a
-  # screensaver_frames-tick window that cycles through the available
-  # info cards, then we go back to the bouncer. Event mode preempts
-  # everything and resets both counters.
+  # Idle-screen flash cycle. The default idle screen is the DVD
+  # bouncer. Every screensaver_cooldown ticks we pick the next
+  # available info card and show it for screensaver_frames ticks,
+  # then go back to the bouncer. Event mode preempts everything and
+  # resets both counters.
   - id: screensaver_frames
     type: int
     restore_value: no
-    initial_value: '0'        # 0 = bouncer; >0 = info carousel active
+    initial_value: '0'        # 0 = bouncer; >0 = card currently flashed
   - id: screensaver_cooldown
     type: int
     restore_value: no
-    initial_value: '120'      # first run after ~30s idle
+    initial_value: '120'      # first card after ~30s idle
 
   # CI tallies from the most recent page of events
   - id: ci_running
@@ -354,6 +366,18 @@ globals:
     restore_value: no
     initial_value: 'false'
 
+  # Night mode: true while inside the sleep window, cleared by the
+  # apply_screen_power script. wake_frames counts down in 250ms ticks
+  # while a button-press temporarily overrides sleep.
+  - id: screen_asleep
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: wake_frames
+    type: int
+    restore_value: no
+    initial_value: '0'
+
   # DVD-bouncer github logo state
   - id: gh_x
     type: int
@@ -375,6 +399,9 @@ interval:
   - interval: 250ms
     then:
       - lambda: |-
+          // Count down the temporary wake window started by a button press
+          if (id(wake_frames) > 0) id(wake_frames) = id(wake_frames) - 1;
+
           // Count down events-mode timer; when it hits 0 drop back to idle
           if (id(idle_frames) > 0) {
             id(idle_frames) = id(idle_frames) - 1;
@@ -417,37 +444,42 @@ interval:
             if (bounced) id(gh_color_idx) = (id(gh_color_idx) + 1) % 5;
           }
 
-          // Idle / screensaver carousel.
-          //   events mode    -> preempts everything; reset screensaver state
-          //   screensaver on -> rotate through available info cards
-          //   otherwise      -> DVD bouncer; tick down until next screensaver
+          // Idle flash cycle.
+          //   events mode   -> preempts everything; reset flash state
+          //   showing card  -> screensaver_frames ticks down; at 0 -> bouncer
+          //   bouncer       -> screensaver_cooldown ticks down; at 0 -> pick
+          //                    the next available card and show it for 10s
+          //
+          // End-to-end: 50s bouncer, 10s card, 50s bouncer, next card, ...
           if (id(idle_frames) > 0) {
-            // Events are showing; don't run the carousel, reset state so we
-            // come back to the bouncer with a fresh cooldown next time.
+            // Events are showing; reset flash state so we resume from
+            // the bouncer once events clear.
             id(screensaver_frames) = 0;
-            id(screensaver_cooldown) = 1200;   // ~5 min after events end
+            id(screensaver_cooldown) = 200;   // ~50s bouncer before first card
             id(idle_screen) = 0;
-            id(idle_swap_frames) = 32;
           } else if (id(screensaver_frames) > 0) {
-            // Carousel active
             id(screensaver_frames) = id(screensaver_frames) - 1;
-            if (id(idle_swap_frames) > 0) {
-              id(idle_swap_frames) = id(idle_swap_frames) - 1;
+            if (id(screensaver_frames) == 0) {
+              // Card window ended - back to bouncer for ~50s
+              id(idle_screen) = 0;
+              id(screensaver_cooldown) = 200;
             }
-            if (id(idle_swap_frames) == 0) {
-              // Build list of screens available right now (info cards only;
-              // the DVD bouncer runs in the "off" window, not inside the carousel).
+          } else {
+            // Bouncer active; count down to next card flash
+            if (id(screensaver_cooldown) > 0) {
+              id(screensaver_cooldown) = id(screensaver_cooldown) - 1;
+            }
+            if (id(screensaver_cooldown) == 0) {
+              // Pick the next available card from the rotation
               int screens[8];
               int n = 0;
               if (id(copilot_ok))   screens[n++] = 1;
-              if (id(stats_ok))   { screens[n++] = 2; screens[n++] = 3; }  // contrib + PRs
+              if (id(stats_ok))   { screens[n++] = 2; screens[n++] = 3; }
               if (id(ci_running) + id(ci_success) + id(ci_failed) > 0) screens[n++] = 4;
               if (id(ratelimit_ok)) screens[n++] = 5;
               if (n == 0) {
-                // Nothing to show - bail out of the screensaver early
-                id(screensaver_frames) = 0;
-                id(idle_screen) = 0;
-                id(screensaver_cooldown) = 1200;
+                // Nothing to show yet - try again in ~10s
+                id(screensaver_cooldown) = 40;
               } else {
                 int cur = id(idle_screen);
                 int next = screens[0];
@@ -455,32 +487,7 @@ interval:
                   if (screens[i] == cur) { next = screens[(i + 1) % n]; break; }
                 }
                 id(idle_screen) = next;
-                id(idle_swap_frames) = 32;     // ~8s per card
-              }
-            }
-            if (id(screensaver_frames) == 0) {
-              // Screensaver window ended - back to bouncer, start cooldown
-              id(idle_screen) = 0;
-              id(idle_swap_frames) = 32;
-              id(screensaver_cooldown) = 1200;   // ~5 min off
-            }
-          } else {
-            // Bouncer active; count down to next screensaver
-            if (id(screensaver_cooldown) > 0) {
-              id(screensaver_cooldown) = id(screensaver_cooldown) - 1;
-            }
-            if (id(screensaver_cooldown) == 0) {
-              // Only start a screensaver if at least one card is available
-              bool any = id(copilot_ok) ||
-                         id(stats_ok) || id(ratelimit_ok) ||
-                         (id(ci_running) + id(ci_success) + id(ci_failed) > 0);
-              if (any) {
-                id(screensaver_frames) = 240;   // ~60s carousel window
-                id(idle_swap_frames) = 0;       // pick first card immediately
-                id(idle_screen) = 0;            // force next-screen logic to advance
-              } else {
-                // Nothing to show yet - try again in 30s
-                id(screensaver_cooldown) = 120;
+                id(screensaver_frames) = 40;    // ~10s card flash
               }
             }
           }
@@ -529,7 +536,44 @@ interval:
             - lambda: 'id(ratelimit_retry_pending) = false;'
             - script.execute: fetch_rate_limit
 
+  # Recompute night-mode state every 30 s. apply_screen_power also
+  # runs on button press and on boot to sync backlight with state.
+  - interval: 30s
+    then:
+      - script.execute: apply_screen_power
+
 script:
+  # Compute whether we should be asleep based on local hour and the
+  # sleep_start_hour / sleep_end_hour substitutions, then enable or
+  # disable the M5StickC Plus backlight (AXP192 LDO2, reg 0x12 bit 2).
+  - id: apply_screen_power
+    mode: restart
+    then:
+      - lambda: |-
+          auto now = id(sntp_time).now();
+          bool sleep = false;
+          if (now.is_valid()) {
+            int h = now.hour;
+            const int s = ${sleep_start_hour};
+            const int e = ${sleep_end_hour};
+            if (s == e)      sleep = false;
+            else if (s < e)  sleep = (h >= s && h < e);
+            else             sleep = (h >= s || h < e);
+          }
+          id(screen_asleep) = sleep;
+          bool want_on = !sleep || id(wake_frames) > 0 || id(idle_frames) > 0;
+
+          // Toggle AXP192 LDO2 (backlight) via I2C: reg 0x12 bit 2
+          uint8_t reg = 0x12;
+          uint8_t v;
+          if (id(bus_a)->write(0x34, &reg, 1, false) != i2c::ERROR_OK) return;
+          if (id(bus_a)->read(0x34, &v, 1) != i2c::ERROR_OK) return;
+          uint8_t nv = want_on ? (v | 0x04) : (v & ~0x04);
+          if (nv != v) {
+            uint8_t buf[2] = { 0x12, nv };
+            id(bus_a)->write(0x34, buf, 2);
+          }
+
   - id: fetch_user_events
     mode: restart
     then:
@@ -776,6 +820,8 @@ script:
                     id(pending_beep_fail) = any_fail;
                     ESP_LOGD("github", "carousel loaded: %d new event(s)", n);
                   }
+              # Wake the screen if we were asleep, so the event is seen.
+              - script.execute: apply_screen_power
               - if:
                   condition:
                     lambda: 'return id(pending_beep) && id(pending_beep_fail);'
@@ -1159,6 +1205,10 @@ display:
       const int H = it.get_height();
 
       it.fill(Color(0, 0, 0));
+
+      // Night mode: render a blank screen (backlight is off anyway,
+      // but this saves redraw cost and avoids a flash on wake).
+      if (id(screen_asleep) && id(wake_frames) == 0 && id(idle_frames) == 0) return;
 
       // header bar
       it.filled_rectangle(0, 0, W, 22, Color(20, 20, 40));

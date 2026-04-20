@@ -48,10 +48,14 @@ battery %.
   review-requested on you, from GitHub search.
 - **API rate-limit card** – remaining hourly budget on the REST core
   bucket, plus the Copilot bucket when the account exposes it.
-- **Screensaver carousel** – while idle (no new events), the DVD
-  bouncer runs for ~5 minutes, then a ~1-minute carousel of the
-  enabled cards above plays, then back to the bouncer. Live events
-  always preempt the screensaver.
+- **Idle card flash** – while idle (no new events), the DVD bouncer
+  runs and once a minute the next enabled card above is flashed on
+  screen for ~10 s before returning to the bouncer. Live events always
+  preempt the flash cycle.
+- **Night mode** – the backlight switches off between configurable
+  hours (default 20:00–08:00 local) to stop it lighting up a bedroom.
+  Press the front M5 button to wake the screen for 15 s, and incoming
+  events wake it for the duration of the carousel.
 - **Graceful degradation** – any card whose permission is missing is
   silently disabled the first time it gets a 401/403/404 and stays
   off until reboot; nothing is retried or log-spammed.
@@ -190,6 +194,12 @@ See [`secrets.yaml.example`](secrets.yaml.example) for the template.
   / `dns2` **substitutions** at the top of `ghmonitorgizmo.yaml`.
   Adjust them to match your network, or delete the `manual_ip:` block
   under `wifi:` entirely to use DHCP instead.
+- **Night mode** is controlled by the `sleep_start_hour`,
+  `sleep_end_hour` and `timezone` substitutions at the top of
+  `ghmonitorgizmo.yaml`. Hours are 0–23 in the given IANA timezone
+  (e.g. `Europe/London`, `America/New_York`). The window may wrap
+  midnight (e.g. `20` → `8`). Set `sleep_start_hour` equal to
+  `sleep_end_hour` to disable night mode entirely.
 - Poll interval is 60 s with a 30 s startup delay, matching the
   GitHub events endpoint's ~60 s server-side cache. Tune via the
   `interval:` block; mind the 5000 req/hr user rate limit.
