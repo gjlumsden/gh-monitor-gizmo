@@ -248,7 +248,7 @@ interval:
             if (bounced) id(gh_color_idx) = (id(gh_color_idx) + 1) % 5;
           }
 
-  - interval: 90s
+  - interval: 60s
     startup_delay: 30s
     then:
       - if:

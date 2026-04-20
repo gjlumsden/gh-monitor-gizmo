@@ -64,21 +64,24 @@ flash and subsequent OTA updates.
 1. Install the [ESPHome Builder add-on][ha-addon] from
    **Settings → Add-ons → Add-on Store**. Start it and open the web UI.
 2. Click **+ NEW DEVICE**, pick any name, accept the defaults, and let
-   it do the initial flash. This does two useful things:
-   - Puts the board into a known-good ESPHome state and gives you a
-     working USB toolchain.
-   - Writes a default **API encryption key** and **AP password** into
-     Home Assistant's `/config/esphome/secrets.yaml`.
-3. Open your Home Assistant `/config/esphome/secrets.yaml` (via the
+   it do the initial flash. This gives you two things:
+   - The board in a known-good ESPHome state with a working USB
+     toolchain.
+   - An auto-generated **API encryption key** (and an AP fallback
+     password) written *into the device's own YAML* by the wizard –
+     **not** into `secrets.yaml`. You'll copy them across in the next
+     step.
+3. Open `secrets.yaml` in the ESPHome dashboard itself (top-right
+   menu → **Secrets**) – or via the
    [File editor add-on][ha-fileeditor], the
    [Samba share add-on][ha-samba], or
-   [Studio Code Server][ha-vscode]). The ESPHome Builder will have
-   added entries for the new device &mdash; either named plainly
-   (`api_encryption_key`, `ap_password`) or prefixed with the device
-   name. Leave them in place and **add** `ghgizmo_*` entries alongside,
-   copying the generated values across. Use
-   [`secrets.yaml.example`](secrets.yaml.example) as a template for
-   the remaining Wi-Fi, GitHub, and OTA keys.
+   [Studio Code Server][ha-vscode] under `/config/esphome/secrets.yaml`.
+   Add the `ghgizmo_*` keys from
+   [`secrets.yaml.example`](secrets.yaml.example), then go back to the
+   auto-generated device's YAML, copy its `api:` `encryption.key` and
+   `wifi:` `ap.password` values, and paste them as the values of
+   `ghgizmo_api_encryption_key` and `ghgizmo_ap_password` in
+   `secrets.yaml`. Fill in the Wi-Fi, GitHub, and OTA keys too.
 4. Back in the ESPHome dashboard, click **EDIT** on the tile you just
    created and replace the entire contents with
    [`ghmonitorgizmo.yaml`](ghmonitorgizmo.yaml) from this repo. Save.
@@ -159,8 +162,9 @@ See [`secrets.yaml.example`](secrets.yaml.example) for the template.
   / `dns2` **substitutions** at the top of `ghmonitorgizmo.yaml`.
   Adjust them to match your network, or delete the `manual_ip:` block
   under `wifi:` entirely to use DHCP instead.
-- Poll interval is 90 s with a 30 s startup delay. Tune via the
-  `interval:` block; mind the GitHub 5000 req/hr user rate limit.
+- Poll interval is 60 s with a 30 s startup delay, matching the
+  GitHub events endpoint's ~60 s server-side cache. Tune via the
+  `interval:` block; mind the 5000 req/hr user rate limit.
 - Memory tuning lives in `esp32.framework.sdkconfig_options`. Do **not**
   add `bluetooth_proxy:` – the ESP-IDF HTTP client needs a contiguous
   allocation that a running BLE stack tends to fragment out of
