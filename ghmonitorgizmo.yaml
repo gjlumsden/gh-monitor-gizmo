@@ -49,6 +49,7 @@ esp32:
       CONFIG_MBEDTLS_DYNAMIC_FREE_CA_CERT: y
 
 logger:
+  level: WARN
 
 api:
   encryption:
@@ -219,6 +220,10 @@ globals:
     restore_value: no
     initial_value: 'false'
   - id: stats_ok
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: cal_retry_pending
     type: bool
     restore_value: no
     initial_value: 'false'
@@ -624,6 +629,16 @@ interval:
             - lambda: 'id(stats_retry_pending) = false;'
             - script.execute: fetch_stats_graphql
 
+  - interval: 900s
+    startup_delay: 75s
+    then:
+      - if:
+          condition:
+            wifi.connected:
+          then:
+            - lambda: 'id(cal_retry_pending) = false;'
+            - script.execute: fetch_cal_graphql
+
   - interval: 600s
     startup_delay: 90s
     then:
@@ -688,8 +703,8 @@ script:
     mode: restart
     then:
       - http_request.get:
-          url: "https://api.github.com/users/${github_user}/events?per_page=6"
-          max_response_buffer_size: 12288
+          url: "https://api.github.com/users/${github_user}/events?per_page=15"
+          max_response_buffer_size: 20480
           request_headers:
             Authorization: "Bearer ${github_token}"
             Accept: "application/vnd.github+json"
@@ -726,6 +741,7 @@ script:
                   JsonDocument filter;
                   filter[0]["id"] = true;
                   filter[0]["type"] = true;
+                  filter[0]["created_at"] = true;
                   filter[0]["repo"]["name"] = true;
                   filter[0]["actor"]["login"] = true;
                   filter[0]["payload"]["workflow_run"]["status"] = true;
@@ -754,6 +770,38 @@ script:
                   }
                   JsonArray arr = doc.as<JsonArray>();
                   if (arr.isNull()) return;
+
+                  // Relative-age helper. GitHub's events API can go
+                  // stale (private org repos often don't emit public
+                  // events), so showing age on each carousel slide makes
+                  // it obvious when the "top" event is actually hours or
+                  // days old.
+                  auto days_from_civil = [](int y, unsigned m, unsigned d) -> long {
+                    y -= m <= 2;
+                    const long era = (y >= 0 ? y : y - 399) / 400;
+                    const unsigned yoe = static_cast<unsigned>(y - era * 400);
+                    const unsigned doy = (153 * (m > 2 ? m - 3 : m + 9) + 2) / 5 + d - 1;
+                    const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+                    return era * 146097L + static_cast<long>(doe) - 719468L;
+                  };
+                  auto age_suffix = [&](const char *created_at) -> std::string {
+                    if (!created_at || !*created_at) return "";
+                    int Y, M, D, h, mi, s;
+                    if (sscanf(created_at, "%d-%d-%dT%d:%d:%dZ",
+                               &Y, &M, &D, &h, &mi, &s) != 6) return "";
+                    long days = days_from_civil(Y, (unsigned) M, (unsigned) D);
+                    time_t ev_t = (time_t) days * 86400 + h * 3600 + mi * 60 + s;
+                    auto now = id(sntp_time).now();
+                    if (!now.is_valid()) return "";
+                    long secs = (long) now.timestamp - (long) ev_t;
+                    if (secs < 0) secs = 0;
+                    char b[16];
+                    if (secs < 90)            snprintf(b, sizeof(b), " %lds", secs);
+                    else if (secs < 90 * 60)  snprintf(b, sizeof(b), " %ldm", secs / 60);
+                    else if (secs < 48 * 3600) snprintf(b, sizeof(b), " %ldh", secs / 3600);
+                    else                      snprintf(b, sizeof(b), " %ldd", secs / 86400);
+                    return std::string(b);
+                  };
 
                   auto make_line = [](JsonObject obj) -> std::string {
                     std::string type = obj["type"] | "";
@@ -898,13 +946,29 @@ script:
                   if (first_fetch) {
                     ESP_LOGI("github", "first fetch since boot: loading only top event as proof-of-life");
                   }
+                  // GitHub's /users/{user}/events is NOT strictly sorted
+                  // by created_at across event categories - e.g. Dependabot
+                  // PR-assignments get clustered ahead of newer pushes.
+                  // Sort a local index by created_at desc so "top" always
+                  // means "newest".
+                  std::vector<int> order;
+                  order.reserve(count);
+                  for (int i = 0; i < count; i++) order.push_back(i);
+                  std::sort(order.begin(), order.end(),
+                            [&](int a, int b) {
+                              const char *ca = arr[a]["created_at"] | "";
+                              const char *cb = arr[b]["created_at"] | "";
+                              return strcmp(ca, cb) > 0;  // ISO8601 sorts lexicographically
+                            });
                   int n_push = 0, n_pr = 0, n_review = 0, n_wf = 0, n_check = 0, n_issue = 0, n_other = 0;
-                  for (int i = 0; i < limit; i++) {
+                  for (int oi = 0; oi < limit; oi++) {
+                    int i = order[oi];
                     JsonObject ev = arr[i].as<JsonObject>();
                     std::string evid = ev["id"] | "";
-                    if (i == 0) new_top = evid;
+                    if (oi == 0) new_top = evid;
                     if (!first_fetch && !evid.empty() && evid == old_last) break;
                     std::string line = make_line(ev);
+                    line += age_suffix(ev["created_at"] | (const char*)nullptr);
                     std::string detail = make_detail(ev);
                     bool cp = event_has_copilot(ev);
                     std::string t = ev["type"] | "";
@@ -1014,10 +1078,11 @@ script:
               - lambda: |-
                   int sc = response->status_code;
                   if (sc != 200) {
-                    ESP_LOGW("github", "copilot usage HTTP %d", sc);
                     if (sc == 401 || sc == 403 || sc == 404) {
                       id(copilot_disabled) = true;
-                      ESP_LOGW("github", "copilot usage disabled until reboot (token missing Plan:RO?)");
+                      ESP_LOGW("github", "copilot usage HTTP %d - disabled until reboot (org-billed account?)", sc);
+                    } else {
+                      ESP_LOGW("github", "copilot usage HTTP %d", sc);
                     }
                     return;
                   }
@@ -1090,7 +1155,7 @@ script:
     then:
       - http_request.post:
           url: "https://api.github.com/graphql"
-          max_response_buffer_size: 16384
+          max_response_buffer_size: 20480
           request_headers:
             Authorization: "Bearer ${github_token}"
             Accept: "application/vnd.github+json"
@@ -1103,7 +1168,7 @@ script:
               char b[4]; snprintf(b, sizeof(b), "%02d", v); return std::string(b);
             };
             auto now = id(sntp_time).now();
-            std::string day_start, week_start, year_start, cal_start;
+            std::string day_start, week_start, year_start;
             std::string merged_week, open_q, review_q;
             std::string issues_assigned_q, issues_authored_q, issues_closed_q;
             if (now.is_valid()) {
@@ -1120,14 +1185,6 @@ script:
                                     wt.tm_year + 1900, wt.tm_mon + 1, wt.tm_mday);
               week_start = wb;
               year_start = std::string(ybuf) + "-01-01T00:00:00Z";
-              // Calendar window: last 35 days (5 weeks). GitHub aligns
-              // the calendar to week boundaries (Sunday start) so we may
-              // get a few extra days at the front - that's fine.
-              time_t cal_t = now.timestamp - (35 * 86400);
-              struct tm ct; gmtime_r(&cal_t, &ct);
-              char cb[24]; snprintf(cb, sizeof(cb), "%04d-%02d-%02dT00:00:00Z",
-                                    ct.tm_year + 1900, ct.tm_mon + 1, ct.tm_mday);
-              cal_start = cb;
               // Also compute a YYYY-MM-DD for search (merged:>= / closed:>=)
               char mb[16]; snprintf(mb, sizeof(mb), "%04d-%02d-%02d",
                                     wt.tm_year + 1900, wt.tm_mon + 1, wt.tm_mday);
@@ -1142,7 +1199,6 @@ script:
               day_start = "2026-01-01T00:00:00Z";
               week_start = "2026-01-01T00:00:00Z";
               year_start = "2026-01-01T00:00:00Z";
-              cal_start  = "2026-01-01T00:00:00Z";
               merged_week = std::string("is:pr author:") + "${github_user}" + " is:merged";
               issues_closed_q = std::string("is:issue author:") + "${github_user}" + " is:closed";
             }
@@ -1157,11 +1213,10 @@ script:
             // contributions on my profile" setting. search() queries
             // still use `author:${github_user}` which is fine.
             std::string q =
-              "query($dayStart:DateTime!, $weekStart:DateTime!, $yearStart:DateTime!, $calStart:DateTime!, $mergedWeek:String!, $openQ:String!, $reviewQ:String!, $issuesAssignedQ:String!, $issuesAuthoredQ:String!, $issuesClosedQ:String!) {"
+              "query($dayStart:DateTime!, $weekStart:DateTime!, $yearStart:DateTime!, $mergedWeek:String!, $openQ:String!, $reviewQ:String!, $issuesAssignedQ:String!, $issuesAuthoredQ:String!, $issuesClosedQ:String!) {"
               "  today: viewer{ contributionsCollection(from:$dayStart){ totalCommitContributions totalPullRequestContributions totalPullRequestReviewContributions totalIssueContributions } }"
               "  week:  viewer{ contributionsCollection(from:$weekStart){ totalCommitContributions totalPullRequestContributions totalPullRequestReviewContributions totalIssueContributions } }"
               "  year:  viewer{ contributionsCollection(from:$yearStart){ totalCommitContributions totalPullRequestContributions } }"
-              "  cal:   viewer{ contributionsCollection(from:$calStart){ contributionCalendar { weeks { contributionDays { contributionCount weekday } } } } }"
               "  merged:         search(query:$mergedWeek,        type:ISSUE){ issueCount }"
               "  open:           search(query:$openQ,             type:ISSUE){ issueCount }"
               "  review:         search(query:$reviewQ,           type:ISSUE){ issueCount }"
@@ -1181,7 +1236,6 @@ script:
             body += "\"dayStart\":\"" + day_start + "\",";
             body += "\"weekStart\":\"" + week_start + "\",";
             body += "\"yearStart\":\"" + year_start + "\",";
-            body += "\"calStart\":\""  + cal_start  + "\",";
             body += "\"mergedWeek\":\"" + merged_week + "\",";
             body += "\"openQ\":\"" + open_q + "\",";
             body += "\"reviewQ\":\"" + review_q + "\",";
@@ -1234,8 +1288,6 @@ script:
                   filter["data"]["week"]["contributionsCollection"]["totalIssueContributions"] = true;
                   filter["data"]["year"]["contributionsCollection"]["totalCommitContributions"] = true;
                   filter["data"]["year"]["contributionsCollection"]["totalPullRequestContributions"] = true;
-                  filter["data"]["cal"]["contributionsCollection"]["contributionCalendar"]["weeks"][0]["contributionDays"][0]["contributionCount"] = true;
-                  filter["data"]["cal"]["contributionsCollection"]["contributionCalendar"]["weeks"][0]["contributionDays"][0]["weekday"] = true;
                   filter["data"]["merged"]["issueCount"] = true;
                   filter["data"]["open"]["issueCount"] = true;
                   filter["data"]["review"]["issueCount"] = true;
@@ -1269,60 +1321,6 @@ script:
                   id(issues_authored_open) = doc["data"]["issuesAuthored"]["issueCount"] | 0;
                   id(issues_closed_week)   = doc["data"]["issuesClosed"]["issueCount"] | 0;
 
-                  // Flatten the calendar: weeks[].contributionDays[] in
-                  // chronological order. Store the last 42 entries
-                  // (6 weeks worst case). Also record cal_start_weekday
-                  // so the heatmap can be laid out.
-                  {
-                    JsonArray weeks = doc["data"]["cal"]["contributionsCollection"]
-                                         ["contributionCalendar"]["weeks"].as<JsonArray>();
-                    std::vector<uint8_t> counts;
-                    int first_wd = 0;
-                    bool first_set = false;
-                    if (!weeks.isNull()) {
-                      for (JsonObject wk : weeks) {
-                        JsonArray days = wk["contributionDays"].as<JsonArray>();
-                        if (days.isNull()) continue;
-                        for (JsonObject d : days) {
-                          int cc = d["contributionCount"] | 0;
-                          int wd = d["weekday"] | 0;
-                          if (!first_set) { first_wd = wd; first_set = true; }
-                          counts.push_back(cc > 255 ? 255 : (uint8_t) cc);
-                        }
-                      }
-                    }
-                    // Keep only the last 42
-                    if (counts.size() > 42) {
-                      int drop = (int) counts.size() - 42;
-                      counts.erase(counts.begin(), counts.begin() + drop);
-                      first_wd = (first_wd + drop) % 7;
-                    }
-                    id(cal_counts) = counts;
-                    id(cal_start_weekday) = first_wd;
-
-                    // Streak: walk backwards; allow today=0 (skip it
-                    // once), then count consecutive non-zero days.
-                    int streak = 0;
-                    int n = (int) counts.size();
-                    int i = n - 1;
-                    if (i >= 0 && counts[i] == 0) i--;  // today hasn't logged yet
-                    while (i >= 0 && counts[i] > 0) { streak++; i--; }
-                    id(streak_days) = streak;
-
-                    // Best day in the last 7 entries (this week-ish).
-                    int best = 0;
-                    int best_wd = -1;
-                    int start = n - 7; if (start < 0) start = 0;
-                    for (int j = start; j < n; j++) {
-                      if (counts[j] > best) {
-                        best = counts[j];
-                        best_wd = (first_wd + j) % 7;
-                      }
-                    }
-                    id(best_day_count) = best;
-                    id(best_day_weekday) = best_wd;
-                  }
-
                   id(stats_ok) = true;
                   ESP_LOGI("github",
                            "stats: c(d/w/y)=%d/%d/%d prs(d/w/y)=%d/%d/%d open=%d merged=%d review=%d",
@@ -1330,10 +1328,121 @@ script:
                            id(prs_today), id(prs_week), id(prs_year),
                            id(prs_open), id(prs_merged_week), id(prs_review_requested));
                   ESP_LOGI("github",
-                           "stats: streak=%d best_day=%d(wd=%d) issues(assigned/authored/closed_wk)=%d/%d/%d cal_days=%d",
-                           id(streak_days), id(best_day_count), id(best_day_weekday),
-                           id(issues_assigned_open), id(issues_authored_open), id(issues_closed_week),
-                           (int) id(cal_counts).size());
+                           "stats: issues(assigned/authored/closed_wk)=%d/%d/%d",
+                           id(issues_assigned_open), id(issues_authored_open), id(issues_closed_week));
+
+  # Calendar fetch - split from the main stats query because carrying
+  # the full contribution calendar (5-6 weeks of day objects) in the
+  # same response as the rest of the stats exhausts the ArduinoJson
+  # heap mid-parse, leaving later days empty. In its own request it has
+  # plenty of room.
+  - id: fetch_cal_graphql
+    mode: restart
+    then:
+      - http_request.post:
+          url: "https://api.github.com/graphql"
+          max_response_buffer_size: 20480
+          request_headers:
+            Authorization: "Bearer ${github_token}"
+            Accept: "application/vnd.github+json"
+            Content-Type: "application/json"
+          body: !lambda |-
+            // Use the default (full-year, ending now) contribution
+            // window. Passing a small `from:` window seems to zero-pad
+            // the tail of the calendar on GitHub's side, which leaves
+            // recent days looking empty.
+            std::string body = "{\"query\":\"{ viewer { contributionsCollection {"
+                               " contributionCalendar { weeks { contributionDays"
+                               " { contributionCount weekday } } } } } }\"}";
+            return body;
+          capture_response: true
+          on_error:
+            - if:
+                condition:
+                  and:
+                    - lambda: 'return !id(cal_retry_pending);'
+                    - wifi.connected:
+                then:
+                  - lambda: 'id(cal_retry_pending) = true;'
+                  - logger.log:
+                      format: "cal graphql fetch failed, retrying in 10s"
+                      level: WARN
+                      tag: "github"
+                  - delay: 10s
+                  - script.execute: fetch_cal_graphql
+                else:
+                  - logger.log:
+                      format: "cal graphql fetch failed (offline or retry exhausted), waiting for next cycle"
+                      level: WARN
+                      tag: "github"
+          on_response:
+            then:
+              - lambda: 'id(cal_retry_pending) = false;'
+              - lambda: |-
+                  if (response->status_code != 200) {
+                    ESP_LOGW("github", "cal graphql HTTP %d", response->status_code);
+                    return;
+                  }
+                  // Streaming text scan. ArduinoJson's filter-based
+                  // parse can't hold the full 53-week response in its
+                  // pool (~371 day objects) so later weeks come back
+                  // as empty objects. The response shape is rigid,
+                  // so we just walk the raw string and pull every
+                  // "contributionCount":N / "weekday":N pair in order.
+                  const std::string &s = body;
+                  std::vector<uint8_t> counts;
+                  std::vector<uint8_t> wdays;
+                  size_t p = 0;
+                  static const char KCC[] = "\"contributionCount\":";
+                  static const char KWD[] = "\"weekday\":";
+                  while (true) {
+                    size_t cc = s.find(KCC, p);
+                    if (cc == std::string::npos) break;
+                    cc += sizeof(KCC) - 1;
+                    int count = atoi(s.c_str() + cc);
+                    size_t wd = s.find(KWD, cc);
+                    if (wd == std::string::npos) break;
+                    wd += sizeof(KWD) - 1;
+                    int weekday = atoi(s.c_str() + wd);
+                    counts.push_back(count > 255 ? 255 : (uint8_t) count);
+                    wdays.push_back((uint8_t)(weekday & 7));
+                    p = wd;
+                  }
+                  int n_total = (int) counts.size();
+                  if (n_total == 0) {
+                    ESP_LOGW("github", "cal: no days scanned from response");
+                    return;
+                  }
+                  // Keep the last 42 days.
+                  int first_wd = wdays.empty() ? 0 : wdays[0];
+                  if ((int) counts.size() > 42) {
+                    int drop = (int) counts.size() - 42;
+                    counts.erase(counts.begin(), counts.begin() + drop);
+                    first_wd = wdays[drop];
+                  }
+                  id(cal_counts) = counts;
+                  id(cal_start_weekday) = first_wd;
+
+                  int streak = 0;
+                  int n = (int) counts.size();
+                  int i = n - 1;
+                  if (i >= 0 && counts[i] == 0) i--;
+                  while (i >= 0 && counts[i] > 0) { streak++; i--; }
+                  id(streak_days) = streak;
+
+                  int best = 0;
+                  int best_wd = -1;
+                  int start = n - 7; if (start < 0) start = 0;
+                  for (int j = start; j < n; j++) {
+                    if (counts[j] > best) {
+                      best = counts[j];
+                      best_wd = (first_wd + j) % 7;
+                    }
+                  }
+                  id(best_day_count) = best;
+                  id(best_day_weekday) = best_wd;
+
+
 
   # /rate_limit - free info: core API budget + any Copilot rate buckets
   # the account exposes. The copilot bucket only appears for accounts
