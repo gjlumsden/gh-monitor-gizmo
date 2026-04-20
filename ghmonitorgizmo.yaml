@@ -306,8 +306,80 @@ globals:
   # every ~60s we flash one info card for ~10s and then return to the
   # bouncer. Index chosen at flash time among available cards:
   # 0 = DVD bouncer (always available),
-  # 1 = copilot usage, 2 = contributions, 3 = PRs, 4 = CI, 5 = rate limit.
+  # 1 = copilot usage, 2 = contributions, 3 = PRs, 4 = CI donut,
+  # 5 = rate limit, 6 = streak & best day, 7 = issues,
+  # 8 = heatmap, 9 = sparkline, 10 = dependabot.
   - id: idle_screen
+    type: int
+    restore_value: no
+    initial_value: '0'
+
+  # Streak / best-day / calendar (derived from contributionsCollection
+  # calendar). cal_counts holds the most-recent ~5 weeks of daily
+  # contribution counts (oldest first, clamped to 0..255 for display
+  # purposes - actual counts can be higher but colour bucketing is the
+  # only use). cal_start_weekday is the weekday (0=Sun..6=Sat) of
+  # cal_counts[0] so the heatmap can be laid out correctly.
+  - id: streak_days
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: best_day_count
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: best_day_weekday
+    type: int
+    restore_value: no
+    initial_value: '-1'
+  - id: cal_counts
+    type: std::vector<uint8_t>
+    restore_value: no
+  - id: cal_start_weekday
+    type: int
+    restore_value: no
+    initial_value: '0'
+
+  # Issues card
+  - id: issues_assigned_open
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: issues_authored_open
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: issues_closed_week
+    type: int
+    restore_value: no
+    initial_value: '0'
+
+  # Dependabot alerts aggregation
+  - id: dependabot_retry_pending
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: dependabot_ok
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: dependabot_disabled
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: dep_open_total
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: dep_repos_affected
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: dep_top_repo
+    type: std::string
+    restore_value: no
+    initial_value: '""'
+  - id: dep_top_repo_count
     type: int
     restore_value: no
     initial_value: '0'
@@ -463,15 +535,16 @@ interval:
           // End-to-end: 50s bouncer, 10s card, 50s bouncer, next card, ...
           if (id(idle_frames) > 0) {
             // Events are showing; reset flash state so we resume from
-            // the bouncer once events clear.
+            // the bouncer once events clear. Leave idle_screen alone so
+            // the rotation advances past the last-shown card next time.
             id(screensaver_frames) = 0;
             id(screensaver_cooldown) = 200;   // ~50s bouncer before first card
-            id(idle_screen) = 0;
           } else if (id(screensaver_frames) > 0) {
             id(screensaver_frames) = id(screensaver_frames) - 1;
             if (id(screensaver_frames) == 0) {
-              // Card window ended - back to bouncer for ~50s
-              id(idle_screen) = 0;
+              // Card window ended - back to bouncer for ~50s. Keep
+              // idle_screen as the last-shown card so the next pick
+              // advances in the rotation.
               id(screensaver_cooldown) = 200;
             }
           } else {
@@ -481,12 +554,16 @@ interval:
             }
             if (id(screensaver_cooldown) == 0) {
               // Pick the next available card from the rotation
-              int screens[8];
+              int screens[16];
               int n = 0;
               if (id(copilot_ok))   screens[n++] = 1;
               if (id(stats_ok))   { screens[n++] = 2; screens[n++] = 3; }
               if (id(ci_running) + id(ci_success) + id(ci_failed) > 0) screens[n++] = 4;
               if (id(ratelimit_ok)) screens[n++] = 5;
+              if (id(stats_ok) && id(streak_days) + id(best_day_count) > 0) screens[n++] = 6;
+              if (id(stats_ok) && (id(issues_assigned_open) + id(issues_authored_open) + id(issues_closed_week) > 0)) screens[n++] = 7;
+              if (id(stats_ok) && !id(cal_counts).empty()) { screens[n++] = 8; screens[n++] = 9; }
+              if (id(dependabot_ok)) screens[n++] = 10;
               if (n == 0) {
                 // Nothing to show yet - try again in ~10s
                 id(screensaver_cooldown) = 40;
@@ -556,6 +633,18 @@ interval:
           then:
             - lambda: 'id(ratelimit_retry_pending) = false;'
             - script.execute: fetch_rate_limit
+
+  - interval: 900s
+    startup_delay: 120s
+    then:
+      - if:
+          condition:
+            and:
+              - wifi.connected:
+              - lambda: 'return !id(dependabot_disabled);'
+          then:
+            - lambda: 'id(dependabot_retry_pending) = false;'
+            - script.execute: fetch_dependabot_graphql
 
   # Recompute night-mode state every 30 s. apply_screen_power also
   # runs on button press and on boot to sync backlight with state.
@@ -1001,7 +1090,7 @@ script:
     then:
       - http_request.post:
           url: "https://api.github.com/graphql"
-          max_response_buffer_size: 8192
+          max_response_buffer_size: 16384
           request_headers:
             Authorization: "Bearer ${github_token}"
             Accept: "application/vnd.github+json"
@@ -1014,8 +1103,9 @@ script:
               char b[4]; snprintf(b, sizeof(b), "%02d", v); return std::string(b);
             };
             auto now = id(sntp_time).now();
-            std::string day_start, week_start, year_start;
+            std::string day_start, week_start, year_start, cal_start;
             std::string merged_week, open_q, review_q;
+            std::string issues_assigned_q, issues_authored_q, issues_closed_q;
             if (now.is_valid()) {
               char ybuf[8]; snprintf(ybuf, sizeof(ybuf), "%04d", now.year);
               day_start  = std::string(ybuf) + "-" + pad2(now.month) + "-" + pad2(now.day_of_month) + "T00:00:00Z";
@@ -1030,11 +1120,21 @@ script:
                                     wt.tm_year + 1900, wt.tm_mon + 1, wt.tm_mday);
               week_start = wb;
               year_start = std::string(ybuf) + "-01-01T00:00:00Z";
-              // Also compute a YYYY-MM-DD for search (merged:>=)
+              // Calendar window: last 35 days (5 weeks). GitHub aligns
+              // the calendar to week boundaries (Sunday start) so we may
+              // get a few extra days at the front - that's fine.
+              time_t cal_t = now.timestamp - (35 * 86400);
+              struct tm ct; gmtime_r(&cal_t, &ct);
+              char cb[24]; snprintf(cb, sizeof(cb), "%04d-%02d-%02dT00:00:00Z",
+                                    ct.tm_year + 1900, ct.tm_mon + 1, ct.tm_mday);
+              cal_start = cb;
+              // Also compute a YYYY-MM-DD for search (merged:>= / closed:>=)
               char mb[16]; snprintf(mb, sizeof(mb), "%04d-%02d-%02d",
                                     wt.tm_year + 1900, wt.tm_mon + 1, wt.tm_mday);
               merged_week = std::string("is:pr author:") + "${github_user}" +
                             " is:merged merged:>=" + mb;
+              issues_closed_q = std::string("is:issue author:") + "${github_user}" +
+                                " is:closed closed:>=" + mb;
             } else {
               // No clock yet - fall back to the start of the Unix year.
               // GraphQL will still accept the window; counts will just be
@@ -1042,36 +1142,52 @@ script:
               day_start = "2026-01-01T00:00:00Z";
               week_start = "2026-01-01T00:00:00Z";
               year_start = "2026-01-01T00:00:00Z";
+              cal_start  = "2026-01-01T00:00:00Z";
               merged_week = std::string("is:pr author:") + "${github_user}" + " is:merged";
+              issues_closed_q = std::string("is:issue author:") + "${github_user}" + " is:closed";
             }
             open_q  = std::string("is:pr author:") + "${github_user}" + " is:open";
             review_q = std::string("is:pr review-requested:") + "${github_user}" + " is:open";
+            issues_assigned_q = std::string("is:issue assignee:") + "${github_user}" + " is:open";
+            issues_authored_q = std::string("is:issue author:") + "${github_user}" + " is:open";
 
+            // Use `viewer` rather than `user(login:...)` so we see the
+            // token owner's full contribution data (private + org repos
+            // the token can see), regardless of the "Include private
+            // contributions on my profile" setting. search() queries
+            // still use `author:${github_user}` which is fine.
             std::string q =
-              "query($user:String!, $dayStart:DateTime!, $weekStart:DateTime!, $yearStart:DateTime!, $mergedWeek:String!, $openQ:String!, $reviewQ:String!) {"
-              "  today: user(login:$user){ contributionsCollection(from:$dayStart){ totalCommitContributions totalPullRequestContributions totalPullRequestReviewContributions totalIssueContributions } }"
-              "  week:  user(login:$user){ contributionsCollection(from:$weekStart){ totalCommitContributions totalPullRequestContributions totalPullRequestReviewContributions totalIssueContributions } }"
-              "  year:  user(login:$user){ contributionsCollection(from:$yearStart){ totalCommitContributions totalPullRequestContributions } }"
-              "  merged:  search(query:$mergedWeek, type:ISSUE){ issueCount }"
-              "  open:    search(query:$openQ,     type:ISSUE){ issueCount }"
-              "  review:  search(query:$reviewQ,   type:ISSUE){ issueCount }"
+              "query($dayStart:DateTime!, $weekStart:DateTime!, $yearStart:DateTime!, $calStart:DateTime!, $mergedWeek:String!, $openQ:String!, $reviewQ:String!, $issuesAssignedQ:String!, $issuesAuthoredQ:String!, $issuesClosedQ:String!) {"
+              "  today: viewer{ contributionsCollection(from:$dayStart){ totalCommitContributions totalPullRequestContributions totalPullRequestReviewContributions totalIssueContributions } }"
+              "  week:  viewer{ contributionsCollection(from:$weekStart){ totalCommitContributions totalPullRequestContributions totalPullRequestReviewContributions totalIssueContributions } }"
+              "  year:  viewer{ contributionsCollection(from:$yearStart){ totalCommitContributions totalPullRequestContributions } }"
+              "  cal:   viewer{ contributionsCollection(from:$calStart){ contributionCalendar { weeks { contributionDays { contributionCount weekday } } } } }"
+              "  merged:         search(query:$mergedWeek,        type:ISSUE){ issueCount }"
+              "  open:           search(query:$openQ,             type:ISSUE){ issueCount }"
+              "  review:         search(query:$reviewQ,           type:ISSUE){ issueCount }"
+              "  issuesAssigned: search(query:$issuesAssignedQ,   type:ISSUE){ issueCount }"
+              "  issuesAuthored: search(query:$issuesAuthoredQ,   type:ISSUE){ issueCount }"
+              "  issuesClosed:   search(query:$issuesClosedQ,     type:ISSUE){ issueCount }"
               "}";
 
             // Manual JSON build (avoids a second parse). Values are user
             // names and ISO dates so no escaping needed.
             std::string body;
-            body.reserve(1024);
+            body.reserve(1536);
             body += "{\"query\":\"";
             // Escape the quotes in q
             for (char c : q) { if (c == '"') body += "\\\""; else body += c; }
             body += "\",\"variables\":{";
-            body += "\"user\":\"${github_user}\",";
             body += "\"dayStart\":\"" + day_start + "\",";
             body += "\"weekStart\":\"" + week_start + "\",";
             body += "\"yearStart\":\"" + year_start + "\",";
+            body += "\"calStart\":\""  + cal_start  + "\",";
             body += "\"mergedWeek\":\"" + merged_week + "\",";
             body += "\"openQ\":\"" + open_q + "\",";
-            body += "\"reviewQ\":\"" + review_q + "\"";
+            body += "\"reviewQ\":\"" + review_q + "\",";
+            body += "\"issuesAssignedQ\":\"" + issues_assigned_q + "\",";
+            body += "\"issuesAuthoredQ\":\"" + issues_authored_q + "\",";
+            body += "\"issuesClosedQ\":\""   + issues_closed_q   + "\"";
             body += "}}";
             return body;
           capture_response: true
@@ -1118,9 +1234,14 @@ script:
                   filter["data"]["week"]["contributionsCollection"]["totalIssueContributions"] = true;
                   filter["data"]["year"]["contributionsCollection"]["totalCommitContributions"] = true;
                   filter["data"]["year"]["contributionsCollection"]["totalPullRequestContributions"] = true;
+                  filter["data"]["cal"]["contributionsCollection"]["contributionCalendar"]["weeks"][0]["contributionDays"][0]["contributionCount"] = true;
+                  filter["data"]["cal"]["contributionsCollection"]["contributionCalendar"]["weeks"][0]["contributionDays"][0]["weekday"] = true;
                   filter["data"]["merged"]["issueCount"] = true;
                   filter["data"]["open"]["issueCount"] = true;
                   filter["data"]["review"]["issueCount"] = true;
+                  filter["data"]["issuesAssigned"]["issueCount"] = true;
+                  filter["data"]["issuesAuthored"]["issueCount"] = true;
+                  filter["data"]["issuesClosed"]["issueCount"] = true;
 
                   JsonDocument doc;
                   DeserializationError err = deserializeJson(doc, body,
@@ -1144,12 +1265,75 @@ script:
                   id(prs_open)            = doc["data"]["open"]["issueCount"] | 0;
                   id(prs_merged_week)     = doc["data"]["merged"]["issueCount"] | 0;
                   id(prs_review_requested)= doc["data"]["review"]["issueCount"] | 0;
+                  id(issues_assigned_open) = doc["data"]["issuesAssigned"]["issueCount"] | 0;
+                  id(issues_authored_open) = doc["data"]["issuesAuthored"]["issueCount"] | 0;
+                  id(issues_closed_week)   = doc["data"]["issuesClosed"]["issueCount"] | 0;
+
+                  // Flatten the calendar: weeks[].contributionDays[] in
+                  // chronological order. Store the last 42 entries
+                  // (6 weeks worst case). Also record cal_start_weekday
+                  // so the heatmap can be laid out.
+                  {
+                    JsonArray weeks = doc["data"]["cal"]["contributionsCollection"]
+                                         ["contributionCalendar"]["weeks"].as<JsonArray>();
+                    std::vector<uint8_t> counts;
+                    int first_wd = 0;
+                    bool first_set = false;
+                    if (!weeks.isNull()) {
+                      for (JsonObject wk : weeks) {
+                        JsonArray days = wk["contributionDays"].as<JsonArray>();
+                        if (days.isNull()) continue;
+                        for (JsonObject d : days) {
+                          int cc = d["contributionCount"] | 0;
+                          int wd = d["weekday"] | 0;
+                          if (!first_set) { first_wd = wd; first_set = true; }
+                          counts.push_back(cc > 255 ? 255 : (uint8_t) cc);
+                        }
+                      }
+                    }
+                    // Keep only the last 42
+                    if (counts.size() > 42) {
+                      int drop = (int) counts.size() - 42;
+                      counts.erase(counts.begin(), counts.begin() + drop);
+                      first_wd = (first_wd + drop) % 7;
+                    }
+                    id(cal_counts) = counts;
+                    id(cal_start_weekday) = first_wd;
+
+                    // Streak: walk backwards; allow today=0 (skip it
+                    // once), then count consecutive non-zero days.
+                    int streak = 0;
+                    int n = (int) counts.size();
+                    int i = n - 1;
+                    if (i >= 0 && counts[i] == 0) i--;  // today hasn't logged yet
+                    while (i >= 0 && counts[i] > 0) { streak++; i--; }
+                    id(streak_days) = streak;
+
+                    // Best day in the last 7 entries (this week-ish).
+                    int best = 0;
+                    int best_wd = -1;
+                    int start = n - 7; if (start < 0) start = 0;
+                    for (int j = start; j < n; j++) {
+                      if (counts[j] > best) {
+                        best = counts[j];
+                        best_wd = (first_wd + j) % 7;
+                      }
+                    }
+                    id(best_day_count) = best;
+                    id(best_day_weekday) = best_wd;
+                  }
+
                   id(stats_ok) = true;
                   ESP_LOGI("github",
                            "stats: c(d/w/y)=%d/%d/%d prs(d/w/y)=%d/%d/%d open=%d merged=%d review=%d",
                            id(commits_today), id(commits_week), id(commits_year),
                            id(prs_today), id(prs_week), id(prs_year),
                            id(prs_open), id(prs_merged_week), id(prs_review_requested));
+                  ESP_LOGI("github",
+                           "stats: streak=%d best_day=%d(wd=%d) issues(assigned/authored/closed_wk)=%d/%d/%d cal_days=%d",
+                           id(streak_days), id(best_day_count), id(best_day_weekday),
+                           id(issues_assigned_open), id(issues_authored_open), id(issues_closed_week),
+                           (int) id(cal_counts).size());
 
   # /rate_limit - free info: core API budget + any Copilot rate buckets
   # the account exposes. The copilot bucket only appears for accounts
@@ -1233,6 +1417,96 @@ script:
                   ESP_LOGI("github", "rate_limit: core=%d/%d copilot=%d/%d",
                            id(rl_core_used), id(rl_core_limit),
                            id(rl_copilot_used), id(rl_copilot_limit));
+
+  # Dependabot alerts: aggregate across repos the token can see. Uses
+  # GraphQL repository.vulnerabilityAlerts(states:OPEN) totalCount per
+  # repo so we only pay for counts, not alert bodies. Requires
+  # "Dependabot alerts: Read-only" (fine-grained PAT) or security_events
+  # scope (classic PAT). On 401/403/404 the card is disabled for the
+  # rest of the boot.
+  - id: fetch_dependabot_graphql
+    mode: restart
+    then:
+      - http_request.post:
+          url: "https://api.github.com/graphql"
+          max_response_buffer_size: 16384
+          request_headers:
+            Authorization: "Bearer ${github_token}"
+            Accept: "application/vnd.github+json"
+            Content-Type: "application/json"
+          body: |-
+            {"query":"query { viewer { repositories(first:100, ownerAffiliations:[OWNER,COLLABORATOR,ORGANIZATION_MEMBER], isArchived:false, orderBy:{field:PUSHED_AT, direction:DESC}) { nodes { name owner { login } vulnerabilityAlerts(states:OPEN, first:0) { totalCount } } } } }"}
+          capture_response: true
+          on_error:
+            - if:
+                condition:
+                  and:
+                    - lambda: 'return !id(dependabot_retry_pending);'
+                    - wifi.connected:
+                then:
+                  - lambda: 'id(dependabot_retry_pending) = true;'
+                  - logger.log:
+                      format: "dependabot fetch failed, retrying in 30s"
+                      level: WARN
+                      tag: "github"
+                  - delay: 30s
+                  - script.execute: fetch_dependabot_graphql
+                else:
+                  - logger.log:
+                      format: "dependabot fetch failed (offline or retry exhausted), waiting for next cycle"
+                      level: WARN
+                      tag: "github"
+          on_response:
+            then:
+              - lambda: 'id(dependabot_retry_pending) = false;'
+              - lambda: |-
+                  int sc = response->status_code;
+                  if (sc != 200) {
+                    ESP_LOGW("github", "dependabot HTTP %d", sc);
+                    if (sc == 401 || sc == 403 || sc == 404) {
+                      id(dependabot_disabled) = true;
+                      ESP_LOGW("github", "dependabot disabled until reboot (token missing Dependabot:RO?)");
+                    }
+                    return;
+                  }
+                  JsonDocument filter;
+                  filter["data"]["viewer"]["repositories"]["nodes"][0]["name"] = true;
+                  filter["data"]["viewer"]["repositories"]["nodes"][0]["owner"]["login"] = true;
+                  filter["data"]["viewer"]["repositories"]["nodes"][0]["vulnerabilityAlerts"]["totalCount"] = true;
+
+                  JsonDocument doc;
+                  DeserializationError err = deserializeJson(doc, body,
+                      DeserializationOption::Filter(filter));
+                  if (err) {
+                    ESP_LOGW("github", "dependabot parse failed: %s", err.c_str());
+                    return;
+                  }
+                  JsonArray nodes = doc["data"]["viewer"]["repositories"]["nodes"].as<JsonArray>();
+                  int total = 0;
+                  int affected = 0;
+                  int top_count = 0;
+                  std::string top_repo;
+                  if (!nodes.isNull()) {
+                    for (JsonObject r : nodes) {
+                      int c = r["vulnerabilityAlerts"]["totalCount"] | 0;
+                      if (c > 0) {
+                        total += c;
+                        affected++;
+                        if (c > top_count) {
+                          top_count = c;
+                          top_repo = r["name"] | "";
+                        }
+                      }
+                    }
+                  }
+                  if (top_repo.size() > 22) top_repo = top_repo.substr(0, 22);
+                  id(dep_open_total) = total;
+                  id(dep_repos_affected) = affected;
+                  id(dep_top_repo) = top_repo;
+                  id(dep_top_repo_count) = top_count;
+                  id(dependabot_ok) = true;
+                  ESP_LOGI("github", "dependabot: open=%d repos=%d top=%s(%d)",
+                           total, affected, top_repo.c_str(), top_count);
 
 spi:
   clk_pin: GPIO13
@@ -1417,26 +1691,59 @@ display:
                    TextAlign::BASELINE_RIGHT, buf);
         }
       } else if (id(screensaver_frames) > 0 && id(idle_screen) == 4) {
-        // --- CI summary card (from the most recent events page) ---
+        // --- CI donut (from the most recent events page) ---
         int cx = W / 2;
-        it.print(cx, 28, id(font_med), Color(180, 220, 255),
+        it.print(cx, 24, id(font_med), Color(180, 220, 255),
                  TextAlign::TOP_CENTER, "CI (recent)");
-        const int col_w = (W - 8) / 3;
-        const int base_x = 4;
-        const char *heads[3] = { "RUN", "OK", "FAIL" };
-        int vals[3]          = { id(ci_running), id(ci_success), id(ci_failed) };
-        Color colors[3]      = { Color(255, 220, 120), Color(140, 255, 160), Color(255, 120, 120) };
-        for (int i = 0; i < 3; i++) {
-          int cx_col = base_x + col_w * i + col_w / 2;
-          it.print(cx_col, 50, id(font_small), colors[i],
-                   TextAlign::TOP_CENTER, heads[i]);
-          char b[12];
-          sprintf(b, "%d", vals[i]);
-          it.print(cx_col, 66, id(font_big), colors[i],
-                   TextAlign::TOP_CENTER, b);
+        int run = id(ci_running), ok = id(ci_success), fail = id(ci_failed);
+        int tot = run + ok + fail;
+        int ring_cx = 40;
+        int ring_cy = 82;
+        int r_out = 28, r_in = 18;
+        if (tot > 0) {
+          // Arc sweep: for each degree, decide colour by cumulative
+          // share and fill a wedge of the ring (r_in..r_out).
+          Color col_run  = Color(255, 220, 120);
+          Color col_ok   = Color(140, 255, 160);
+          Color col_fail = Color(255, 120, 120);
+          float p_run  = (float) run  / (float) tot;
+          float p_ok   = (float) ok   / (float) tot;
+          // p_fail is the remainder
+          for (int deg = 0; deg < 360; deg++) {
+            float frac = (float) deg / 360.0f;
+            Color c = (frac < p_run)        ? col_run  :
+                      (frac < p_run + p_ok) ? col_ok   :
+                                              col_fail;
+            // Angle: 0 deg = top (12 o'clock), clockwise
+            float rad = (deg - 90) * 3.14159265f / 180.0f;
+            float cs = cosf(rad), sn = sinf(rad);
+            for (int r = r_in; r <= r_out; r++) {
+              int x = ring_cx + (int) (cs * r);
+              int y = ring_cy + (int) (sn * r);
+              it.draw_pixel_at(x, y, c);
+            }
+          }
+          // Big total in the centre of the ring
+          char tb[12]; sprintf(tb, "%d", tot);
+          it.print(ring_cx, ring_cy, id(font_med), Color(220, 230, 255),
+                   TextAlign::CENTER, tb);
+        } else {
+          it.print(ring_cx, ring_cy, id(font_small), Color(120, 120, 150),
+                   TextAlign::CENTER, "no data");
         }
-        it.print(cx, H - 4, id(font_small), Color(140, 140, 170),
-                 TextAlign::BASELINE_CENTER, "last ~30 events");
+        // Legend on the right
+        int lx = 92;
+        int ly = 58;
+        char lb[16];
+        it.filled_rectangle(lx, ly + 2,      8, 8, Color(255, 220, 120));
+        sprintf(lb, "%d run",  run);
+        it.print(lx + 12, ly, id(font_small), Color(255, 220, 120), lb);
+        it.filled_rectangle(lx, ly + 2 + 18, 8, 8, Color(140, 255, 160));
+        sprintf(lb, "%d ok",   ok);
+        it.print(lx + 12, ly + 18, id(font_small), Color(140, 255, 160), lb);
+        it.filled_rectangle(lx, ly + 2 + 36, 8, 8, Color(255, 120, 120));
+        sprintf(lb, "%d fail", fail);
+        it.print(lx + 12, ly + 36, id(font_small), Color(255, 120, 120), lb);
       } else if (id(screensaver_frames) > 0 && id(idle_screen) == 5 && id(ratelimit_ok)) {
         // --- API rate-limit card ---
         int cx = W / 2;
@@ -1467,6 +1774,173 @@ display:
             else           snprintf(buf, sizeof(buf), "resets in %uh", dt / 3600);
             it.print(cx, H - 4, id(font_small), Color(140, 140, 170),
                      TextAlign::BASELINE_CENTER, buf);
+          }
+        }
+      } else if (id(screensaver_frames) > 0 && id(idle_screen) == 6 && id(stats_ok)) {
+        // --- Streak & best day card ---
+        int cx = W / 2;
+        it.print(cx, 24, id(font_med), Color(255, 200, 120),
+                 TextAlign::TOP_CENTER, "Activity");
+        // Left half: streak
+        {
+          char buf[12];
+          sprintf(buf, "%d", id(streak_days));
+          it.print(60, 52, id(font_big), Color(255, 180, 100),
+                   TextAlign::TOP_CENTER, buf);
+          it.print(60, 88, id(font_small), Color(200, 180, 160),
+                   TextAlign::TOP_CENTER,
+                   id(streak_days) == 1 ? "day streak" : "day streak");
+        }
+        // Right half: best day this week
+        {
+          char buf[16];
+          sprintf(buf, "%d", id(best_day_count));
+          it.print(180, 52, id(font_big), Color(140, 255, 160),
+                   TextAlign::TOP_CENTER, buf);
+          const char *wdays[7] = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
+          int wd = id(best_day_weekday);
+          const char *lbl = (wd >= 0 && wd <= 6) ? wdays[wd] : "best";
+          it.print(180, 88, id(font_small), Color(200, 220, 200),
+                   TextAlign::TOP_CENTER, lbl);
+        }
+        // Divider
+        it.line(W / 2, 48, W / 2, H - 14, Color(60, 60, 80));
+        it.print(60,  H - 4, id(font_small), Color(180, 140, 100),
+                 TextAlign::BASELINE_CENTER, "streak");
+        it.print(180, H - 4, id(font_small), Color(140, 200, 140),
+                 TextAlign::BASELINE_CENTER, "best day");
+      } else if (id(screensaver_frames) > 0 && id(idle_screen) == 7 && id(stats_ok)) {
+        // --- Issues card ---
+        int cx = W / 2;
+        it.print(cx, 24, id(font_med), Color(255, 200, 140),
+                 TextAlign::TOP_CENTER, "Issues");
+        {
+          char buf[12];
+          sprintf(buf, "%d", id(issues_assigned_open));
+          it.print(cx, 46, id(font_big), Color(255, 220, 120),
+                   TextAlign::TOP_CENTER, buf);
+          it.print(cx, 78, id(font_small), Color(200, 200, 210),
+                   TextAlign::TOP_CENTER, "assigned / open");
+        }
+        {
+          char buf[40];
+          sprintf(buf, "%d authored", id(issues_authored_open));
+          it.print(4, H - 4, id(font_small), Color(200, 170, 255),
+                   TextAlign::BASELINE_LEFT, buf);
+          sprintf(buf, "%d closed wk", id(issues_closed_week));
+          it.print(W - 4, H - 4, id(font_small), Color(140, 255, 160),
+                   TextAlign::BASELINE_RIGHT, buf);
+        }
+      } else if (id(screensaver_frames) > 0 && id(idle_screen) == 8 && id(stats_ok)) {
+        // --- Heatmap: last ~5 weeks, GitHub-style greens ---
+        int cx = W / 2;
+        it.print(cx, 22, id(font_med), Color(140, 255, 160),
+                 TextAlign::TOP_CENTER, "Heatmap");
+        const auto &counts = id(cal_counts);
+        int n = (int) counts.size();
+        int first_wd = id(cal_start_weekday);
+        // Lay out rows = weekday (Sun=0 at top .. Sat=6), cols = weeks.
+        // Cell size tuned to fit 6 columns + left label strip.
+        const int cell = 12;
+        const int pad  = 2;
+        const int grid_top = 42;
+        const int label_w  = 14;
+        const int grid_left = (W - (label_w + 6 * (cell + pad))) / 2 + label_w;
+        // Row labels (Mon/Wed/Fri)
+        const char *row_lbls[7] = { "S", "M", "T", "W", "T", "F", "S" };
+        for (int r = 0; r < 7; r++) {
+          if (r == 1 || r == 3 || r == 5) {
+            it.print(grid_left - 6, grid_top + r * (cell + pad) + cell / 2,
+                     id(font_small), Color(120, 120, 150),
+                     TextAlign::CENTER_RIGHT, row_lbls[r]);
+          }
+        }
+        static const Color heat[5] = {
+          Color(22, 27, 34),
+          Color(14, 68, 41),
+          Color(0, 109, 50),
+          Color(38, 166, 65),
+          Color(57, 211, 83),
+        };
+        for (int i = 0; i < n; i++) {
+          int wd = (first_wd + i) % 7;         // 0=Sun..6=Sat
+          int week = (first_wd + i) / 7;
+          if (week >= 6) break;                 // hard cap to 6 cols
+          int c = counts[i];
+          int bucket = c == 0 ? 0 : c <= 2 ? 1 : c <= 5 ? 2 : c <= 10 ? 3 : 4;
+          int x = grid_left + week * (cell + pad);
+          int y = grid_top  + wd   * (cell + pad);
+          it.filled_rectangle(x, y, cell, cell, heat[bucket]);
+        }
+        it.print(cx, H - 4, id(font_small), Color(120, 120, 150),
+                 TextAlign::BASELINE_CENTER, "last 5 weeks");
+      } else if (id(screensaver_frames) > 0 && id(idle_screen) == 9 && id(stats_ok)) {
+        // --- Sparkline: last 14 days of commits ---
+        int cx = W / 2;
+        it.print(cx, 24, id(font_med), Color(180, 220, 255),
+                 TextAlign::TOP_CENTER, "Last 14 days");
+        const auto &counts = id(cal_counts);
+        int n = (int) counts.size();
+        int start = n - 14; if (start < 0) start = 0;
+        int m = n - start;
+        // Find max for scaling
+        int vmax = 1;
+        int vsum = 0;
+        for (int i = start; i < n; i++) { if (counts[i] > vmax) vmax = counts[i]; vsum += counts[i]; }
+        // Plot area
+        const int plot_left = 10, plot_right = W - 10;
+        const int plot_top  = 48, plot_bot   = H - 22;
+        const int plot_w = plot_right - plot_left;
+        const int plot_h = plot_bot - plot_top;
+        // Baseline
+        it.line(plot_left, plot_bot, plot_right, plot_bot, Color(60, 60, 80));
+        // Points + lines
+        int prev_x = 0, prev_y = 0;
+        for (int i = 0; i < m; i++) {
+          int v = counts[start + i];
+          int x = plot_left + (m <= 1 ? plot_w / 2 : (plot_w * i) / (m - 1));
+          int y = plot_bot - (plot_h * v) / vmax;
+          if (i > 0) it.line(prev_x, prev_y, x, y, Color(140, 220, 255));
+          it.filled_circle(x, y, 2, Color(200, 240, 255));
+          prev_x = x; prev_y = y;
+        }
+        // Summary bottom row
+        {
+          char buf[32];
+          sprintf(buf, "total %d", vsum);
+          it.print(4, H - 4, id(font_small), Color(180, 220, 255),
+                   TextAlign::BASELINE_LEFT, buf);
+          sprintf(buf, "peak %d", vmax);
+          it.print(W - 4, H - 4, id(font_small), Color(255, 220, 120),
+                   TextAlign::BASELINE_RIGHT, buf);
+        }
+      } else if (id(screensaver_frames) > 0 && id(idle_screen) == 10 && id(dependabot_ok)) {
+        // --- Dependabot alerts card ---
+        int cx = W / 2;
+        Color title_c = id(dep_open_total) > 0 ? Color(255, 160, 120) : Color(140, 255, 160);
+        it.print(cx, 24, id(font_med), title_c, TextAlign::TOP_CENTER, "Dependabot");
+        {
+          char buf[12];
+          sprintf(buf, "%d", id(dep_open_total));
+          Color num_c = id(dep_open_total) == 0 ? Color(140, 255, 160) :
+                        id(dep_open_total) < 5  ? Color(255, 220, 120) :
+                                                   Color(255, 120, 120);
+          it.print(cx, 46, id(font_big), num_c, TextAlign::TOP_CENTER, buf);
+          const char *sub = id(dep_open_total) == 0 ? "all clear" :
+                                                       "open alerts";
+          it.print(cx, 78, id(font_small), Color(200, 200, 210),
+                   TextAlign::TOP_CENTER, sub);
+        }
+        if (id(dep_open_total) > 0) {
+          char buf[48];
+          sprintf(buf, "%d repos", id(dep_repos_affected));
+          it.print(4, H - 4, id(font_small), Color(255, 200, 140),
+                   TextAlign::BASELINE_LEFT, buf);
+          const std::string &tr = id(dep_top_repo);
+          if (!tr.empty()) {
+            sprintf(buf, "%s %d", tr.c_str(), id(dep_top_repo_count));
+            it.print(W - 4, H - 4, id(font_small), Color(255, 160, 120),
+                     TextAlign::BASELINE_RIGHT, buf);
           }
         }
       } else {

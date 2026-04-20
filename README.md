@@ -41,13 +41,27 @@ battery %.
   with billing read access (see
   [`secrets.yaml.example`](secrets.yaml.example)).
 - **Contributions card** – commits and PRs for today, this week and
-  this year, via a single GraphQL query against
-  `contributionsCollection`. Needs `Contents: Read-only` for private
-  repos to count.
+  this year, via a single GraphQL query against the authenticated
+  `viewer`'s `contributionsCollection`. Private + org repos the token
+  can see are included regardless of your profile's "Include private
+  contributions" toggle.
 - **Pull-request card** – PRs you have open, merged this week, and
   review-requested on you, from GitHub search.
+- **CI donut** – running / success / failed workflow runs on the
+  recent events page, as a coloured ring with legend.
 - **API rate-limit card** – remaining hourly budget on the REST core
   bucket, plus the Copilot bucket when the account exposes it.
+- **Activity card** – current contribution streak (consecutive days)
+  and the best day this week, derived from your contribution calendar.
+- **Issues card** – open issues assigned to you, open issues you've
+  authored, and issues you've closed this week.
+- **Contribution heatmap** – last ~5 weeks of daily contributions as
+  a GitHub-style 7×6 green grid.
+- **14-day sparkline** – a tiny line graph of daily commit counts for
+  the last fortnight, with total and peak day.
+- **Dependabot card** – open vulnerability alerts across all repos
+  the token can see, plus the repo with the most open alerts. Updates
+  every 15 minutes.
 - **Idle card flash** – while idle (no new events), the DVD bouncer
   runs and once a minute the next enabled card above is flashed on
   screen for ~10 s before returning to the bouncer. Live events always
@@ -141,17 +155,32 @@ carousel. Optional extra cards each want their own fine-grained
 permission; anything the token can't read is silently disabled the
 first time it fails, so you can start with the minimum and add later.
 
-| Card                          | Fine-grained permission        | Classic scope            |
-|-------------------------------|--------------------------------|--------------------------|
-| Events carousel + CI tally    | Metadata: Read-only (default)  | (public) or `repo`       |
-| Private-repo events + stats   | Contents: Read-only            | `repo`                   |
-| Copilot usage (billing)       | Plan: Read-only                | `manage_billing:copilot` |
-| Contributions + PR stats      | Contents: Read-only            | `repo`, `read:user`      |
-| API rate-limit card           | (any token)                    | (any)                    |
+| Card                                 | Fine-grained permission              | Classic scope            |
+|--------------------------------------|--------------------------------------|--------------------------|
+| Events carousel + CI tally + donut   | Metadata: Read-only (default)        | (public) or `repo`       |
+| Private-repo events                  | Contents: Read-only                  | `repo`                   |
+| Copilot usage (billing)              | Plan: Read-only                      | `manage_billing:copilot` |
+| Contributions, PRs, Issues, Activity, Heatmap, Sparkline | Contents: Read-only + Pull requests: Read-only + Issues: Read-only | `repo`, `read:user`, `read:org` |
+| API rate-limit card                  | (any token)                          | (any)                    |
+| Dependabot alerts                    | Dependabot alerts: Read-only         | `security_events`        |
 
-For private contributions to show up in the Contributions / PR cards,
-also enable **"Include private contributions on my profile"** under
-<https://github.com/settings/profile>.
+The firmware uses the GraphQL `viewer` field, so private and org
+contributions are counted automatically if the token can see those
+repos — the old "Include private contributions on my profile" toggle
+is **not** required.
+
+For **org repos**, a **classic PAT** is the most reliable route:
+generate one with `repo`, `read:org`, `read:user`, and (if you want
+the Dependabot card) `security_events`. On the token's settings page,
+click **Authorize SSO** next to each org that uses SAML.
+
+A **fine-grained PAT** also works but must have each org and each
+repo granted explicitly, with the permissions above.
+
+> **Copilot co-authored commits** only count toward your contributions
+> when the commit's primary `author` is you. A `Co-authored-by:` trailer
+> alone does not make it one of yours — that's a GitHub rule, nothing
+> the firmware can change.
 
 Create a token at <https://github.com/settings/tokens>. Put it in
 `secrets.yaml` as `ghgizmo_github_token`. It's sent over HTTPS only to
@@ -200,9 +229,11 @@ See [`secrets.yaml.example`](secrets.yaml.example) for the template.
   (e.g. `Europe/London`, `America/New_York`). The window may wrap
   midnight (e.g. `20` → `8`). Set `sleep_start_hour` equal to
   `sleep_end_hour` to disable night mode entirely.
-- Poll interval is 60 s with a 30 s startup delay, matching the
-  GitHub events endpoint's ~60 s server-side cache. Tune via the
-  `interval:` block; mind the 5000 req/hr user rate limit.
+- Poll interval for the events feed is 60 s with a 30 s startup delay,
+  matching the GitHub events endpoint's ~60 s server-side cache. The
+  Copilot usage, Contributions/PR/Issues stats, and rate-limit probe
+  run every 10 min; Dependabot alerts every 15 min. Tune via the
+  `interval:` blocks; mind the 5000 req/hr user rate limit.
 - Memory tuning lives in `esp32.framework.sdkconfig_options`. Do **not**
   add `bluetooth_proxy:` – the ESP-IDF HTTP client needs a contiguous
   allocation that a running BLE stack tends to fragment out of
@@ -242,6 +273,13 @@ See [`secrets.yaml.example`](secrets.yaml.example) for the template.
 - **Nothing shown after boot** – the device waits 30 s for Wi-Fi, then
   polls. On first fetch only the top event is shown as proof of life;
   after that, only genuinely new events trigger a carousel.
+- **Contribution counts look too low** – check the token has access to
+  the private/org repos you contribute to (see above). Classic PATs
+  with SSO authorised per org are the most reliable.
+- **Dependabot card never appears** – the token is missing
+  `security_events` / `Dependabot alerts: Read-only`, or the account
+  has no alerts to show. The card is silently disabled on the first
+  401/403/404 and won't retry until reboot.
 - **Battery reads 100 % with USB plugged** – that's the AXP192's raw
   voltage crossing the upper bound of the 3.3–4.2 V mapping.
 
