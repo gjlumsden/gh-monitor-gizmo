@@ -1,0 +1,15 @@
+# ESPHome build artefacts and caches
+.esphome/
+*.pyc
+__pycache__/
+
+# Local secrets - never commit
+secrets.yaml
+
+# Editor cruft
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
