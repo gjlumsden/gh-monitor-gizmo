@@ -703,8 +703,8 @@ script:
     mode: restart
     then:
       - http_request.get:
-          url: "https://api.github.com/users/${github_user}/events?per_page=15"
-          max_response_buffer_size: 20480
+          url: "https://api.github.com/users/${github_user}/events?per_page=10"
+          max_response_buffer_size: 32768
           request_headers:
             Authorization: "Bearer ${github_token}"
             Accept: "application/vnd.github+json"
@@ -1695,15 +1695,41 @@ display:
                    cp   ? Color(200, 170, 255) :
                           Color(120, 220, 255);
         int cx = W / 2;
-        int headline_y = 50;
-        int detail_y = 86;
+
+        // Check whether the detail line needs to wrap onto two lines
+        bool detail_wrap = false;
+        std::string detail_top, detail_bot;
+        if (!detail.empty()) {
+          int x1, y1, tw, th;
+          it.get_text_bounds(0, 0, detail.c_str(), id(font_med), TextAlign::CENTER,
+                             &x1, &y1, &tw, &th);
+          if (tw > W - 8) {
+            // Split at the double-space separator between extra and repo
+            auto sep = detail.find("  ");
+            if (sep != std::string::npos) {
+              detail_top = detail.substr(0, sep);
+              detail_bot = detail.substr(sep + 2);
+              detail_wrap = true;
+            }
+          }
+        }
+
+        int headline_y = detail_wrap ? 40 : 50;
+        int detail_y   = detail_wrap ? 74 : 86;
         if (cp) {
           it.print(6, headline_y - 12, id(mdi_copilot), Color(180, 140, 255), "\U000F06A9");
         }
         it.print(cx, headline_y, id(font_big), fg, TextAlign::CENTER, text.c_str());
         if (!detail.empty()) {
-          it.print(cx, detail_y, id(font_med), Color(200, 200, 220),
-                   TextAlign::CENTER, detail.c_str());
+          if (detail_wrap) {
+            it.print(cx, detail_y, id(font_med), Color(200, 200, 220),
+                     TextAlign::CENTER, detail_top.c_str());
+            it.print(cx, detail_y + 20, id(font_med), Color(200, 200, 220),
+                     TextAlign::CENTER, detail_bot.c_str());
+          } else {
+            it.print(cx, detail_y, id(font_med), Color(200, 200, 220),
+                     TextAlign::CENTER, detail.c_str());
+          }
         }
         it.print(4, H - 10, id(font_small), Color(120, 120, 150),
                  TextAlign::BASELINE_LEFT, "A: dismiss");
