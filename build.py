@@ -32,6 +32,7 @@ INCLUDE_RE = re.compile(r"^\s*#\s*!include\s+(\S+)\s*$")
 
 DEVICES: list[tuple[str, str]] = [
     ("m5stickcplus/ghmonitorgizmo.yaml.src", "dist/ghmonitorgizmo-cplus.yaml"),
+    ("m5sticks3/ghmonitorgizmo-s3.yaml.src", "dist/ghmonitorgizmo-s3.yaml"),
 ]
 
 

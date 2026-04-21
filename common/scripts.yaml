@@ -330,13 +330,13 @@
                     lambda: 'return id(pending_beep) && id(pending_beep_fail);'
                   then:
                     - lambda: 'id(pending_beep) = false;'
-                    - rtttl.play: "fail:d=8,o=5,b=220:e,c,a4,p"
+                    - script.execute: play_beep_fail
               - if:
                   condition:
                     lambda: 'return id(pending_beep) && !id(pending_beep_fail);'
                   then:
                     - lambda: 'id(pending_beep) = false;'
-                    - rtttl.play: "ping:d=16,o=6,b=300:e,g"
+                    - script.execute: play_beep_ping
 
   # Copilot usage for the authenticated user. Pulls the current billing
   # cycle's usage items and sums anything where product == "Copilot".

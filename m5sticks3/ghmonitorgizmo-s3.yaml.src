@@ -14,17 +14,19 @@ substitutions:
   timezone: "Europe/London"
 
   # --- Beeps ---
-  # Set to "false" to silence the short beep that plays each time a
-  # screensaver info card (Copilot / Contributions / PRs / CI / Rate
-  # Limit) appears. The new-event success/fail beeps are unaffected.
+  # The M5Stick S3 has no passive buzzer; it uses an ES8311 codec with
+  # an AW8737 amplifier driven over I2S. Audio support for that path is
+  # deferred, so on this firmware the three beep scripts below are
+  # intentional no-ops and this substitution has no effect. Kept for
+  # interface parity with the Plus 1.1 firmware.
   card_beep_enabled: "true"
 
   # --- Screen protection ---
-  # Fractional backlight brightness 0.0 - 1.0. Only honoured on the
-  # M5Stick S3 firmware (PWM on GPIO38). On this Plus 1.1 firmware the
-  # backlight is switched via AXP192 LDO2 and cannot be dimmed, so this
-  # value is ignored.
-  backlight_brightness: "1.0"
+  # Fractional backlight brightness 0.0 - 1.0. The S3 drives the LCD
+  # backlight with a real PWM on GPIO38, so reducing this value dims the
+  # panel and is the single most effective way to prevent burn-in on
+  # these small ST7789 displays.
+  backlight_brightness: "0.6"
   # Minutes of total inactivity (no new events, no button press) after
   # which the screen is blanked regardless of night-mode window. Set to
   # "0" to disable. Reserved for a future release; currently unused.
@@ -33,25 +35,40 @@ substitutions:
   # --- Networking (static IP) ---
   # To use DHCP instead, delete the `manual_ip:` block in `wifi:` below;
   # these substitutions then become unused and can be removed.
-  static_ip: "192.168.4.10"
+  static_ip: "192.168.4.11"
   gateway:   "192.168.4.1"
   subnet:    "255.255.255.0"
   dns1:      "1.1.1.1"
   dns2:      "8.8.8.8"
 
 esphome:
-  name: ghmonitorgizmo
-  friendly_name: GH Monitor Gizmo
+  name: ghmonitorgizmo-s3
+  friendly_name: GH Monitor Gizmo S3
+  on_boot:
+    # M5PM1 PMIC housekeeping. Register 0x09 is the PMIC watchdog /
+    # config byte; on StickS3 it must be 0x00 for reliable I2C talk to
+    # the PMIC. M5Unified's init does the same thing. A stale non-zero
+    # value here (from a previous firmware) can make the PMIC stop
+    # responding to reads, so we clear it on every boot.
+    priority: 600
+    then:
+      - lambda: |-
+          uint8_t buf[2] = { 0x09, 0x00 };
+          id(bus_a)->write(0x6e, buf, 2);
 
 esp32:
-  board: esp32dev
+  board: esp32-s3-devkitc-1
+  variant: esp32s3
+  flash_size: 8MB
   framework:
     type: esp-idf
-    advanced:
-      # Bootloader supports SRAM1 as IRAM on this chip; reclaim ~40KB
-      # of code space. Silences the warning at boot.
-      sram1_as_iram: true
     sdkconfig_options:
+      # 8 MB octal PSRAM on the ESP32-S3-PICO-1-N8R8
+      CONFIG_ESPTOOLPY_FLASHSIZE_8MB: y
+      CONFIG_SPIRAM: y
+      CONFIG_SPIRAM_MODE_OCT: y
+      CONFIG_SPIRAM_SPEED_80M: y
+      CONFIG_SPIRAM_USE_MALLOC: y
       CONFIG_LWIP_MAX_SOCKETS: "16"
       CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN: "4096"
       CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN: "16384"
@@ -59,30 +76,47 @@ esp32:
       CONFIG_MBEDTLS_DYNAMIC_FREE_CONFIG_DATA: y
       CONFIG_MBEDTLS_DYNAMIC_FREE_CA_CERT: y
 
+psram:
+  mode: octal
+  speed: 80MHz
+
 # !include ../common/network.yaml
 i2c:
+  # Internal I2C bus shared by the M5PM1 PMIC (0x6e), BMI270 IMU (0x68)
+  # and ES8311 audio codec (0x18). The Grove / Port.A bus is separate
+  # (SCL=GPIO10, SDA=GPIO9) and deliberately not declared here because
+  # nothing in this firmware uses it.
   id: bus_a
-  sda: GPIO21
-  scl: GPIO22
+  sda: GPIO47
+  scl: GPIO48
   scan: true
 
-# --- Buzzer on GPIO2 (M5StickC Plus) ---
+# --- LCD backlight PWM ---
+# The StickS3 drives the ST7789P3 backlight directly from GPIO38 (no
+# PMIC rail). Using a `monochromatic` light over a `ledc` output lets
+# `apply_screen_power` dim and blank the backlight cleanly.
 output:
   - platform: ledc
-    pin: GPIO2
-    id: buzzer_out
+    pin: GPIO38
+    id: backlight_pwm
+    frequency: 1000Hz
 
-rtttl:
-  id: buzzer
-  output: buzzer_out
+light:
+  - platform: monochromatic
+    id: backlight_light
+    output: backlight_pwm
+    default_transition_length: 100ms
+    restore_mode: ALWAYS_ON
+    internal: true
 
 binary_sensor:
   - platform: gpio
     pin:
-      number: GPIO37
+      number: GPIO11       # StickS3 KEY1
       inverted: true
       mode:
         input: true
+        pullup: true
     name: "Button A"
     id: btn_a
     on_press:
@@ -106,8 +140,8 @@ binary_sensor:
 # !include ../common/intervals.yaml
 script:
   # Compute whether we should be asleep based on local hour and the
-  # sleep_start_hour / sleep_end_hour substitutions, then enable or
-  # disable the M5StickC Plus backlight (AXP192 LDO2, reg 0x12 bit 2).
+  # sleep_start_hour / sleep_end_hour substitutions, then dim or blank
+  # the LCD backlight via the monochromatic light on GPIO38.
   - id: apply_screen_power
     mode: restart
     then:
@@ -123,49 +157,46 @@ script:
             else             sleep = (h >= s || h < e);
           }
           id(screen_asleep) = sleep;
-          bool want_on = !sleep || id(wake_frames) > 0 || id(idle_frames) > 0;
-
-          // Toggle AXP192 LDO2 (backlight) via I2C: reg 0x12 bit 2
-          uint8_t reg = 0x12;
-          uint8_t v;
-          if (id(bus_a)->write(0x34, &reg, 1, false) != i2c::ERROR_OK) return;
-          if (id(bus_a)->read(0x34, &v, 1) != i2c::ERROR_OK) return;
-          uint8_t nv = want_on ? (v | 0x04) : (v & ~0x04);
-          if (nv != v) {
-            uint8_t buf[2] = { 0x12, nv };
-            id(bus_a)->write(0x34, buf, 2);
-          }
+      - if:
+          condition:
+            lambda: 'return !id(screen_asleep) || id(wake_frames) > 0 || id(idle_frames) > 0;'
+          then:
+            - light.turn_on:
+                id: backlight_light
+                brightness: ${backlight_brightness}
+          else:
+            - light.turn_off:
+                id: backlight_light
 
   # --- Audio stubs ---
   # The shared intervals/scripts fragments call these three scripts
   # instead of `rtttl.play` directly so that devices without a buzzer
-  # (e.g. M5Stick S3) can supply empty stubs. On this Plus 1.1 firmware
-  # each one plays a short tone via the passive buzzer on GPIO2.
+  # (this S3 firmware) can supply empty stubs. Wiring these through the
+  # ES8311 codec + AW8737 amp over I2S is deferred to a future release;
+  # speaker PA toggling would go via M5PM1 GPIO3 (regs 0x10/0x11/0x13/
+  # 0x16 bit 3) over the internal I2C bus.
   - id: play_beep_card
     mode: restart
-    then:
-      - rtttl.play: "blip:d=32,o=6,b=300:c"
+    then: []
   - id: play_beep_fail
     mode: restart
-    then:
-      - rtttl.play: "fail:d=8,o=5,b=220:e,c,a4,p"
+    then: []
   - id: play_beep_ping
     mode: restart
-    then:
-      - rtttl.play: "ping:d=16,o=6,b=300:e,g"
+    then: []
 
 # !include ../common/scripts.yaml
 spi:
-  clk_pin: GPIO13
-  mosi_pin: GPIO15
+  clk_pin: GPIO40
+  mosi_pin: GPIO39
 
 display:
   - platform: st7789v
     model: CUSTOM
     id: main_display
-    cs_pin: GPIO5
-    dc_pin: GPIO23
-    reset_pin: GPIO18
+    cs_pin: GPIO41
+    dc_pin: GPIO45
+    reset_pin: GPIO21
     rotation: ${rotate_display}
     height: 240
     width: 135
@@ -174,6 +205,11 @@ display:
     update_interval: 250ms
     lambda: |-
 # !include ../common/display_lambda.yaml
+# Stub battery sensor. Battery voltage readback on the StickS3 goes
+# through an M5PM1 PMIC register whose address is not yet documented in
+# public sources, so this sensor just publishes NaN - the shared
+# display lambda references `id(battery_level)` and expects it to
+# exist. Wiring a real reading is a future release.
 sensor:
   - platform: template
     name: "Battery Level"
@@ -181,17 +217,4 @@ sensor:
     unit_of_measurement: "%"
     accuracy_decimals: 0
     update_interval: 60s
-    lambda: |-
-      // AXP192 battery voltage: reg 0x78 (hi 8 bits) + 0x79 (lo 4 bits), 1.1 mV/LSB
-      uint8_t reg = 0x78;
-      if (id(bus_a)->write(0x34, &reg, 1, false) != i2c::ERROR_OK) return NAN;
-      uint8_t buf[2];
-      if (id(bus_a)->read(0x34, buf, 2) != i2c::ERROR_OK) return NAN;
-      uint16_t raw = ((uint16_t) buf[0] << 4) | (buf[1] & 0x0F);
-      float v = raw * 1.1f / 1000.0f;
-      // Map 3.00 V = 0%, 4.15 V = 100% (M5StickC Plus tops out ~4.17 V;
-      // this gives a true 100% at full charge without clipping too early).
-      float pct = (v - 3.0f) / 1.15f * 100.0f;
-      if (pct < 0) pct = 0;
-      if (pct > 100) pct = 100;
-      return pct;
+    lambda: "return NAN;"

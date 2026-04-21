@@ -3,19 +3,21 @@
 [![ESPHome](https://img.shields.io/badge/ESPHome-2026.4%2B-black?logo=esphome&logoColor=white)][esphome]
 [![Home Assistant](https://img.shields.io/badge/Home%20Assistant-compatible-41BDF5?logo=home-assistant&logoColor=white)][ha-esphome]
 [![M5StickC Plus 1.1](https://img.shields.io/badge/device-M5StickC%20Plus%201.1-red)][m5]
+[![M5Stick S3](https://img.shields.io/badge/device-M5Stick%20S3%20(K150)-blue)][m5s3]
 [![Built with Copilot](https://img.shields.io/badge/built%20with-GitHub%20Copilot-24292e?logo=github-copilot&logoColor=white)](https://github.com/features/copilot)
 [![Licence: MIT](https://img.shields.io/badge/licence-MIT-blue.svg)](LICENSE)
 
-An [ESPHome][esphome] firmware for an [M5StickC Plus 1.1][m5] that turns
-it into a desk-top GitHub activity monitor. It polls your user events
-feed, carousels through anything new, beeps on CI failures, bounces a
-Material Design GitHub logo around the screen when idle, and shows
-battery %.
+An [ESPHome][esphome] firmware for the [M5StickC Plus 1.1][m5] and
+[M5Stick S3 (K150)][m5s3] that turns them into a desk-top GitHub
+activity monitor. It polls your user events feed, carousels through
+anything new, beeps on CI failures (Plus 1.1 only), bounces a Material
+Design GitHub logo around the screen when idle, and shows battery % on
+the Plus 1.1.
 
-> Only tested on the **M5StickC Plus 1.1**. It should in principle
-> work on any ESP32 with an ST7789V-compatible display and a buzzer,
-> but you'll need to adjust pins, dimensions, and drop the AXP192
-> battery sensor.
+> The Plus 1.1 and S3 share a 135×240 ST7789 panel so the entire UI
+> layer is identical between them. The S3 build has no audio (it uses
+> an I2S codec rather than a passive buzzer; audio support is deferred)
+> and currently does not publish a battery-level sensor.
 
 ![gh-monitor-gizmo running on an M5StickC Plus 1.1](images/m5stick-cplus-1.1-gh-gizmo.png)
 
@@ -32,8 +34,8 @@ battery %.
 - **Copilot detection** – highlights events where the actor, PR
   author, requested reviewer, commenter, or workflow triggering actor
   contains "copilot" (case-insensitive).
-- **Audio cues** – short "ping" on new events, distinct "fail" tune on
-  a CI failure.
+- **Audio cues** (Plus 1.1 only) – short "ping" on new events, distinct
+  "fail" tune on a CI failure. On the S3 these three scripts are no-ops.
 - **Idle DVD-bouncer** – the GitHub logo bounces around the screen
   and cycles colour on each wall hit.
 - **Copilot usage card** – every 10 minutes the gizmo pulls your
@@ -73,13 +75,20 @@ battery %.
 - **Graceful degradation** – any card whose permission is missing is
   silently disabled the first time it gets a 401/403/404 and stays
   off until reboot; nothing is retried or log-spammed.
-- **Battery %** – read from the on-board AXP192 PMIC over I²C and
-  exposed to Home Assistant as a sensor.
+- **Battery %** (Plus 1.1 only) – read from the on-board AXP192 PMIC
+  over I²C and exposed to Home Assistant as a sensor. On the S3 the
+  sensor exists but publishes `NaN` until a M5PM1 battery register is
+  wired up.
 
 ## Hardware
 
+Choose one:
+
 - [M5StickC Plus 1.1][m5] (ESP32-PICO, 135×240 ST7789V, AXP192,
   buzzer, front "M5" button, side button, IR, mic)
+- [M5Stick S3 (K150)][m5s3] (ESP32-S3-PICO-1-N8R8, 135×240 ST7789P3,
+  M5PM1 PMIC, ES8311 I2S codec + AW8737 amp, BMI270 IMU, KEY1 + KEY2
+  buttons)
 - USB-C cable for the initial flash and power
 
 ## Prerequisites
@@ -125,6 +134,7 @@ flash and subsequent OTA updates.
    | Device | File |
    |---|---|
    | M5StickC Plus 1.1 | `ghmonitorgizmo-cplus.yaml` |
+   | M5Stick S3 (K150) | `ghmonitorgizmo-s3.yaml` |
 
    Back in the ESPHome dashboard, click **EDIT** on the tile you just
    created and replace the entire contents with the downloaded YAML.
@@ -139,10 +149,10 @@ and exposes a **Battery Level** sensor.
 ### Option 2 – ESPHome CLI
 
 This repo stores the firmware as **source templates** under
-[`m5stickcplus/`](m5stickcplus/) with shared partials in
-[`common/`](common/). Run [`build.py`](build.py) to inline the
-includes into a single self-contained YAML in `dist/`, then point
-`esphome` at it.
+[`m5stickcplus/`](m5stickcplus/) and [`m5sticks3/`](m5sticks3/) with
+shared partials in [`common/`](common/). Run [`build.py`](build.py) to
+inline the includes into a single self-contained YAML per device in
+`dist/`, then point `esphome` at the one you want.
 
 ```powershell
 pipx install esphome   # or: pip install --user esphome
@@ -152,14 +162,16 @@ cd gh-monitor-gizmo
 copy secrets.yaml.example secrets.yaml
 notepad secrets.yaml   # fill in the values
 
-# build the single-file YAML
+# build every device into dist/
 python build.py
 
-# first flash over USB
-esphome run dist/ghmonitorgizmo-cplus.yaml
+# first flash over USB - pick the matching device
+esphome run dist/ghmonitorgizmo-cplus.yaml    # M5StickC Plus 1.1
+esphome run dist/ghmonitorgizmo-s3.yaml       # M5Stick S3
 
 # later updates over Wi-Fi
 esphome run dist/ghmonitorgizmo-cplus.yaml --device ghmonitorgizmo.local
+esphome run dist/ghmonitorgizmo-s3.yaml --device ghmonitorgizmo-s3.local
 ```
 
 `build.py` uses only the Python standard library (no `pip install`
@@ -256,14 +268,23 @@ See [`secrets.yaml.example`](secrets.yaml.example) for the template.
   add `bluetooth_proxy:` – the ESP-IDF HTTP client needs a contiguous
   allocation that a running BLE stack tends to fragment out of
   existence.
+- **Screen protection** – small ST7789 panels can develop permanent
+  image retention after weeks of 24/7 use at full brightness. Both
+  firmwares expose a `backlight_brightness` substitution (0.0–1.0);
+  only the S3 honours it (real PWM on GPIO38). The Plus 1.1 backlight
+  is switched by the AXP192 LDO2 rail and cannot be dimmed, so on that
+  device `backlight_brightness` is ignored and the primary defence is
+  night-mode hours. On the S3 the default is `0.6` and lowering it
+  further (e.g. `0.35`) is the single most effective way to prevent
+  burn-in.
 
 ## Controls
 
-| Input | Action |
-|-------|--------|
-| Front **M5** button (GPIO37) | Dismiss current event card → return to idle |
-| Side button (GPIO39) | Unused (wire up in `binary_sensor:` if you want) |
-| Reset (left side) | Hardware reset |
+| Input | Plus 1.1 | Stick S3 | Action |
+|-------|----------|----------|--------|
+| Front button | M5 (GPIO37) | KEY1 (GPIO11) | Dismiss current event card → return to idle |
+| Side button | GPIO39 | KEY2 (GPIO12) | Unused (wire up in `binary_sensor:` if you want) |
+| Reset | left side | side | Hardware reset |
 
 ## Screen layout
 
@@ -318,9 +339,12 @@ gh-gizmo/
 │   ├── scripts.yaml       # GitHub fetch scripts (user events, copilot, stats, ...)
 │   └── display_lambda.yaml
 ├── m5stickcplus/
-│   └── ghmonitorgizmo.yaml.src   # M5StickC Plus 1.1 source template
+│   └── ghmonitorgizmo.yaml.src      # M5StickC Plus 1.1 source template
+├── m5sticks3/
+│   └── ghmonitorgizmo-s3.yaml.src   # M5Stick S3 (K150) source template
 ├── dist/                  # build output (gitignored)
-│   └── ghmonitorgizmo-cplus.yaml
+│   ├── ghmonitorgizmo-cplus.yaml
+│   └── ghmonitorgizmo-s3.yaml
 ├── build.py               # inlines `# !include` markers into dist/
 └── .github/workflows/build.yml   # CI: builds on push, releases on tag
 ```
@@ -354,6 +378,7 @@ schema validation, autocomplete, and inline docs for every component.
 - [Home Assistant ESPHome integration][ha-esphome]
 - [ESPHome Builder add-on (HA)][ha-addon]
 - [M5StickC Plus 1.1 hardware docs][m5]
+- [M5Stick S3 hardware docs][m5s3]
 - [GitHub Events API][gh-events]
 
 ## Licence
@@ -361,6 +386,7 @@ schema validation, autocomplete, and inline docs for every component.
 [MIT](LICENSE)
 
 [m5]: https://docs.m5stack.com/en/core/m5stickc_plus
+[m5s3]: https://docs.m5stack.com/en/core/StickS3
 [releases]: https://github.com/gjlumsden/gh-monitor-gizmo/releases/latest
 [esphome]: https://esphome.io/
 [esphome-install]: https://esphome.io/guides/installing_esphome

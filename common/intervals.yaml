@@ -107,7 +107,7 @@ interval:
               - lambda: 'return ${card_beep_enabled};'
           then:
             - lambda: 'id(pending_card_beep) = false;'
-            - rtttl.play: "blip:d=32,o=6,b=300:c"
+            - script.execute: play_beep_card
           else:
             - lambda: 'id(pending_card_beep) = false;'
 
