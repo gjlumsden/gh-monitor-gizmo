@@ -1,0 +1,456 @@
+      const int W = it.get_width();
+      const int H = it.get_height();
+
+      it.fill(Color(0, 0, 0));
+
+      // Night mode: render a blank screen (backlight is off anyway,
+      // but this saves redraw cost and avoids a flash on wake).
+      if (id(screen_asleep) && id(wake_frames) == 0 && id(idle_frames) == 0) return;
+
+      // header bar
+      it.filled_rectangle(0, 0, W, 22, Color(20, 20, 40));
+      it.print(4, 3, id(font_med), Color(180, 200, 255), "GitHub");
+
+      // battery % (header, between label and CI tally)
+      {
+        int bl = 0;
+        if (!std::isnan(id(battery_level).state)) bl = (int) id(battery_level).state;
+        if (bl < 0) bl = 0; if (bl > 100) bl = 100;
+        char batt[8];
+        sprintf(batt, "%d%%", bl);
+        Color bc = bl < 20 ? Color(255, 80, 80) :
+                   bl < 50 ? Color(255, 220, 80) :
+                             Color(120, 255, 120);
+        it.print(72, 3, id(font_med), bc, batt);
+      }
+
+      // CI tally: right-aligned in the header
+      {
+        const int slot_w = 32;
+        int base_x = W - slot_w * 3 - 4;
+        char nbuf[8];
+        it.print(base_x, 5, id(mdi_status), Color(255, 220, 120), "\U000F0453");
+        sprintf(nbuf, "%d", id(ci_running));
+        it.print(base_x + 14, 3, id(font_small), Color(255, 220, 120), nbuf);
+        it.print(base_x + slot_w, 5, id(mdi_status), Color(140, 255, 160), "\U000F012C");
+        sprintf(nbuf, "%d", id(ci_success));
+        it.print(base_x + slot_w + 14, 3, id(font_small), Color(140, 255, 160), nbuf);
+        it.print(base_x + slot_w * 2, 5, id(mdi_status), Color(255, 120, 120), "\U000F0156");
+        sprintf(nbuf, "%d", id(ci_failed));
+        it.print(base_x + slot_w * 2 + 14, 3, id(font_small), Color(255, 120, 120), nbuf);
+      }
+
+      bool events_mode = id(idle_frames) > 0 && !id(carousel_lines).empty();
+
+      if (events_mode) {
+        int idx = id(carousel_idx);
+        int n = (int) id(carousel_lines).size();
+        if (idx < 0) idx = 0;
+        if (idx >= n) idx = n - 1;
+
+        const std::string &text = id(carousel_lines)[idx];
+        const std::string &detail = (idx < (int) id(carousel_detail).size())
+                                      ? id(carousel_detail)[idx]
+                                      : std::string();
+        bool cp = id(carousel_copilot)[idx] != 0;
+        bool fail = id(carousel_ci_fail)[idx] != 0;
+        Color fg = fail ? Color(255, 120, 120) :
+                   cp   ? Color(200, 170, 255) :
+                          Color(120, 220, 255);
+        int cx = W / 2;
+
+        // Check whether the detail line needs to wrap onto two lines
+        bool detail_wrap = false;
+        std::string detail_top, detail_bot;
+        if (!detail.empty()) {
+          int x1, y1, tw, th;
+          it.get_text_bounds(0, 0, detail.c_str(), id(font_med), TextAlign::CENTER,
+                             &x1, &y1, &tw, &th);
+          if (tw > W - 8) {
+            // Split at the double-space separator between extra and repo
+            auto sep = detail.find("  ");
+            if (sep != std::string::npos) {
+              detail_top = detail.substr(0, sep);
+              detail_bot = detail.substr(sep + 2);
+              detail_wrap = true;
+            }
+          }
+        }
+
+        int headline_y = detail_wrap ? 40 : 50;
+        int detail_y   = detail_wrap ? 74 : 86;
+        if (cp) {
+          it.print(6, headline_y - 12, id(mdi_copilot), Color(180, 140, 255), "\U000F06A9");
+        }
+        it.print(cx, headline_y, id(font_big), fg, TextAlign::CENTER, text.c_str());
+        if (!detail.empty()) {
+          if (detail_wrap) {
+            it.print(cx, detail_y, id(font_med), Color(200, 200, 220),
+                     TextAlign::CENTER, detail_top.c_str());
+            it.print(cx, detail_y + 20, id(font_med), Color(200, 200, 220),
+                     TextAlign::CENTER, detail_bot.c_str());
+          } else {
+            it.print(cx, detail_y, id(font_med), Color(200, 200, 220),
+                     TextAlign::CENTER, detail.c_str());
+          }
+        }
+        it.print(4, H - 10, id(font_small), Color(120, 120, 150),
+                 TextAlign::BASELINE_LEFT, "A: dismiss");
+
+        // carousel dots
+        int dots_y = H - 4;
+        int spacing = 8;
+        int first_x = cx - (n - 1) * spacing / 2;
+        for (int i = 0; i < n; i++) {
+          Color dc = (i == idx) ? Color(220, 230, 255) : Color(60, 80, 100);
+          it.filled_circle(first_x + i * spacing, dots_y, 2, dc);
+        }
+      } else if (id(screensaver_frames) > 0 && id(idle_screen) == 1 && id(copilot_ok)) {
+        // --- Copilot usage card ---
+        int cx = W / 2;
+        // Big Copilot icon, left of the number
+        it.print(14, 30, id(mdi_copilot_big), Color(180, 140, 255), "\U000F06A9");
+        // Title
+        it.print(cx + 12, 34, id(font_med), Color(200, 170, 255),
+                 TextAlign::TOP_CENTER, "Copilot");
+        // Big quantity
+        {
+          char qbuf[24];
+          float q = id(copilot_qty);
+          if (q >= 1000.0f) sprintf(qbuf, "%.1fk", q / 1000.0f);
+          else if (q == (int) q) sprintf(qbuf, "%d", (int) q);
+          else sprintf(qbuf, "%.1f", q);
+          it.print(cx + 12, 58, id(font_big), Color(220, 200, 255),
+                   TextAlign::TOP_CENTER, qbuf);
+        }
+        // SKU / unit subtitle
+        {
+          const std::string &sku = id(copilot_sku);
+          const char *sub = sku.empty() ? "requests this cycle" : sku.c_str();
+          it.print(cx, 92, id(font_small), Color(180, 180, 210),
+                   TextAlign::TOP_CENTER, sub);
+        }
+        // Net $ amount, bottom-right
+        if (id(copilot_net) > 0.0f) {
+          char nbuf[16];
+          sprintf(nbuf, "$%.2f", id(copilot_net));
+          it.print(W - 4, H - 4, id(font_small), Color(140, 255, 160),
+                   TextAlign::BASELINE_RIGHT, nbuf);
+        }
+      } else if (id(screensaver_frames) > 0 && id(idle_screen) == 2 && id(stats_ok)) {
+        // --- Contributions card (commits / PRs over today / week / year) ---
+        int cx = W / 2;
+        it.print(cx, 28, id(font_med), Color(180, 220, 255),
+                 TextAlign::TOP_CENTER, "Contributions");
+        // 3-column mini-table: TODAY / WEEK / YEAR, rows: commits, PRs
+        const int col_w = (W - 8) / 3;
+        const int base_x = 4;
+        const char *heads[3] = { "TODAY", "WEEK", "YEAR" };
+        int commits[3] = { id(commits_today), id(commits_week), id(commits_year) };
+        int prs[3]     = { id(prs_today),     id(prs_week),     id(prs_year) };
+        for (int i = 0; i < 3; i++) {
+          int cx_col = base_x + col_w * i + col_w / 2;
+          it.print(cx_col, 50, id(font_small), Color(160, 160, 190),
+                   TextAlign::TOP_CENTER, heads[i]);
+          char b[12];
+          sprintf(b, "%d", commits[i]);
+          it.print(cx_col, 66, id(font_med), Color(140, 255, 160),
+                   TextAlign::TOP_CENTER, b);
+          sprintf(b, "%d", prs[i]);
+          it.print(cx_col, 90, id(font_med), Color(200, 170, 255),
+                   TextAlign::TOP_CENTER, b);
+        }
+        it.print(4,  H - 4, id(font_small), Color(140, 255, 160),
+                 TextAlign::BASELINE_LEFT, "commits");
+        it.print(W - 4, H - 4, id(font_small), Color(200, 170, 255),
+                 TextAlign::BASELINE_RIGHT, "PRs");
+      } else if (id(screensaver_frames) > 0 && id(idle_screen) == 3 && id(stats_ok)) {
+        // --- PR status card ---
+        int cx = W / 2;
+        it.print(cx, 28, id(font_med), Color(200, 170, 255),
+                 TextAlign::TOP_CENTER, "Pull Requests");
+        // Big number: open PRs authored by you
+        {
+          char buf[12];
+          sprintf(buf, "%d", id(prs_open));
+          it.print(cx, 50, id(font_big), Color(220, 220, 255),
+                   TextAlign::TOP_CENTER, buf);
+          it.print(cx, 82, id(font_small), Color(180, 180, 210),
+                   TextAlign::TOP_CENTER, "open");
+        }
+        // Bottom row: merged this week | review requested on you
+        {
+          char buf[40];
+          sprintf(buf, "%d merged wk", id(prs_merged_week));
+          it.print(4, H - 4, id(font_small), Color(140, 255, 160),
+                   TextAlign::BASELINE_LEFT, buf);
+          sprintf(buf, "%d to review", id(prs_review_requested));
+          it.print(W - 4, H - 4, id(font_small), Color(255, 220, 120),
+                   TextAlign::BASELINE_RIGHT, buf);
+        }
+      } else if (id(screensaver_frames) > 0 && id(idle_screen) == 4) {
+        // --- CI donut (from the most recent events page) ---
+        int cx = W / 2;
+        it.print(cx, 24, id(font_med), Color(180, 220, 255),
+                 TextAlign::TOP_CENTER, "CI (recent)");
+        int run = id(ci_running), ok = id(ci_success), fail = id(ci_failed);
+        int tot = run + ok + fail;
+        int ring_cx = 40;
+        int ring_cy = 82;
+        int r_out = 28, r_in = 18;
+        if (tot > 0) {
+          // Arc sweep: for each degree, decide colour by cumulative
+          // share and fill a wedge of the ring (r_in..r_out).
+          Color col_run  = Color(255, 220, 120);
+          Color col_ok   = Color(140, 255, 160);
+          Color col_fail = Color(255, 120, 120);
+          float p_run  = (float) run  / (float) tot;
+          float p_ok   = (float) ok   / (float) tot;
+          // p_fail is the remainder
+          for (int deg = 0; deg < 360; deg++) {
+            float frac = (float) deg / 360.0f;
+            Color c = (frac < p_run)        ? col_run  :
+                      (frac < p_run + p_ok) ? col_ok   :
+                                              col_fail;
+            // Angle: 0 deg = top (12 o'clock), clockwise
+            float rad = (deg - 90) * 3.14159265f / 180.0f;
+            float cs = cosf(rad), sn = sinf(rad);
+            for (int r = r_in; r <= r_out; r++) {
+              int x = ring_cx + (int) (cs * r);
+              int y = ring_cy + (int) (sn * r);
+              it.draw_pixel_at(x, y, c);
+            }
+          }
+          // Big total in the centre of the ring
+          char tb[12]; sprintf(tb, "%d", tot);
+          it.print(ring_cx, ring_cy, id(font_med), Color(220, 230, 255),
+                   TextAlign::CENTER, tb);
+        } else {
+          it.print(ring_cx, ring_cy, id(font_small), Color(120, 120, 150),
+                   TextAlign::CENTER, "no data");
+        }
+        // Legend on the right
+        int lx = 92;
+        int ly = 58;
+        char lb[16];
+        it.filled_rectangle(lx, ly + 2,      8, 8, Color(255, 220, 120));
+        sprintf(lb, "%d run",  run);
+        it.print(lx + 12, ly, id(font_small), Color(255, 220, 120), lb);
+        it.filled_rectangle(lx, ly + 2 + 18, 8, 8, Color(140, 255, 160));
+        sprintf(lb, "%d ok",   ok);
+        it.print(lx + 12, ly + 18, id(font_small), Color(140, 255, 160), lb);
+        it.filled_rectangle(lx, ly + 2 + 36, 8, 8, Color(255, 120, 120));
+        sprintf(lb, "%d fail", fail);
+        it.print(lx + 12, ly + 36, id(font_small), Color(255, 120, 120), lb);
+      } else if (id(screensaver_frames) > 0 && id(idle_screen) == 5 && id(ratelimit_ok)) {
+        // --- API rate-limit card ---
+        int cx = W / 2;
+        it.print(cx, 28, id(font_med), Color(180, 220, 255),
+                 TextAlign::TOP_CENTER, "API Rate Limit");
+        {
+          char buf[32];
+          sprintf(buf, "%d / %d", id(rl_core_used), id(rl_core_limit));
+          it.print(cx, 48, id(font_big), Color(220, 220, 255),
+                   TextAlign::TOP_CENTER, buf);
+          it.print(cx, 80, id(font_small), Color(180, 180, 210),
+                   TextAlign::TOP_CENTER, "core used / hour");
+        }
+        // Copilot bucket if exposed
+        if (id(rl_copilot_used) >= 0) {
+          char buf[40];
+          sprintf(buf, "copilot %d/%d", id(rl_copilot_used), id(rl_copilot_limit));
+          it.print(cx, H - 4, id(font_small), Color(200, 170, 255),
+                   TextAlign::BASELINE_CENTER, buf);
+        } else {
+          // Show reset time instead
+          uint32_t reset = id(rl_core_reset);
+          auto now = id(sntp_time).now();
+          if (reset > 0 && now.is_valid() && reset > (uint32_t) now.timestamp) {
+            uint32_t dt = reset - now.timestamp;
+            char buf[32];
+            if (dt < 3600) snprintf(buf, sizeof(buf), "resets in %um", dt / 60);
+            else           snprintf(buf, sizeof(buf), "resets in %uh", dt / 3600);
+            it.print(cx, H - 4, id(font_small), Color(140, 140, 170),
+                     TextAlign::BASELINE_CENTER, buf);
+          }
+        }
+      } else if (id(screensaver_frames) > 0 && id(idle_screen) == 6 && id(stats_ok)) {
+        // --- Streak & best day card ---
+        int cx = W / 2;
+        it.print(cx, 24, id(font_med), Color(255, 200, 120),
+                 TextAlign::TOP_CENTER, "Activity");
+        // Left half: streak
+        {
+          char buf[12];
+          sprintf(buf, "%d", id(streak_days));
+          it.print(60, 52, id(font_big), Color(255, 180, 100),
+                   TextAlign::TOP_CENTER, buf);
+          it.print(60, 88, id(font_small), Color(200, 180, 160),
+                   TextAlign::TOP_CENTER,
+                   id(streak_days) == 1 ? "day streak" : "day streak");
+        }
+        // Right half: best day this week
+        {
+          char buf[16];
+          sprintf(buf, "%d", id(best_day_count));
+          it.print(180, 52, id(font_big), Color(140, 255, 160),
+                   TextAlign::TOP_CENTER, buf);
+          const char *wdays[7] = { "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
+          int wd = id(best_day_weekday);
+          const char *lbl = (wd >= 0 && wd <= 6) ? wdays[wd] : "best";
+          it.print(180, 88, id(font_small), Color(200, 220, 200),
+                   TextAlign::TOP_CENTER, lbl);
+        }
+        // Divider
+        it.line(W / 2, 48, W / 2, H - 14, Color(60, 60, 80));
+        it.print(60,  H - 4, id(font_small), Color(180, 140, 100),
+                 TextAlign::BASELINE_CENTER, "streak");
+        it.print(180, H - 4, id(font_small), Color(140, 200, 140),
+                 TextAlign::BASELINE_CENTER, "best day");
+      } else if (id(screensaver_frames) > 0 && id(idle_screen) == 7 && id(stats_ok)) {
+        // --- Issues card ---
+        int cx = W / 2;
+        it.print(cx, 24, id(font_med), Color(255, 200, 140),
+                 TextAlign::TOP_CENTER, "Issues");
+        {
+          char buf[12];
+          sprintf(buf, "%d", id(issues_assigned_open));
+          it.print(cx, 46, id(font_big), Color(255, 220, 120),
+                   TextAlign::TOP_CENTER, buf);
+          it.print(cx, 78, id(font_small), Color(200, 200, 210),
+                   TextAlign::TOP_CENTER, "assigned / open");
+        }
+        {
+          char buf[40];
+          sprintf(buf, "%d authored", id(issues_authored_open));
+          it.print(4, H - 4, id(font_small), Color(200, 170, 255),
+                   TextAlign::BASELINE_LEFT, buf);
+          sprintf(buf, "%d closed wk", id(issues_closed_week));
+          it.print(W - 4, H - 4, id(font_small), Color(140, 255, 160),
+                   TextAlign::BASELINE_RIGHT, buf);
+        }
+      } else if (id(screensaver_frames) > 0 && id(idle_screen) == 8 && id(stats_ok)) {
+        // --- Heatmap: last ~5 weeks, GitHub-style greens ---
+        int cx = W / 2;
+        it.print(cx, 22, id(font_med), Color(140, 255, 160),
+                 TextAlign::TOP_CENTER, "Heatmap");
+        const auto &counts = id(cal_counts);
+        int n = (int) counts.size();
+        int first_wd = id(cal_start_weekday);
+        // Lay out rows = weekday (Sun=0 at top .. Sat=6), cols = weeks.
+        // Cell size tuned to fit 6 columns + left label strip.
+        const int cell = 12;
+        const int pad  = 2;
+        const int grid_top = 42;
+        const int label_w  = 14;
+        const int grid_left = (W - (label_w + 6 * (cell + pad))) / 2 + label_w;
+        // Row labels (Mon/Wed/Fri)
+        const char *row_lbls[7] = { "S", "M", "T", "W", "T", "F", "S" };
+        for (int r = 0; r < 7; r++) {
+          if (r == 1 || r == 3 || r == 5) {
+            it.print(grid_left - 6, grid_top + r * (cell + pad) + cell / 2,
+                     id(font_small), Color(120, 120, 150),
+                     TextAlign::CENTER_RIGHT, row_lbls[r]);
+          }
+        }
+        static const Color heat[5] = {
+          Color(22, 27, 34),
+          Color(14, 68, 41),
+          Color(0, 109, 50),
+          Color(38, 166, 65),
+          Color(57, 211, 83),
+        };
+        for (int i = 0; i < n; i++) {
+          int wd = (first_wd + i) % 7;         // 0=Sun..6=Sat
+          int week = (first_wd + i) / 7;
+          if (week >= 6) break;                 // hard cap to 6 cols
+          int c = counts[i];
+          int bucket = c == 0 ? 0 : c <= 2 ? 1 : c <= 5 ? 2 : c <= 10 ? 3 : 4;
+          int x = grid_left + week * (cell + pad);
+          int y = grid_top  + wd   * (cell + pad);
+          it.filled_rectangle(x, y, cell, cell, heat[bucket]);
+        }
+        it.print(cx, H - 4, id(font_small), Color(120, 120, 150),
+                 TextAlign::BASELINE_CENTER, "last 5 weeks");
+      } else if (id(screensaver_frames) > 0 && id(idle_screen) == 9 && id(stats_ok)) {
+        // --- Sparkline: last 14 days of commits ---
+        int cx = W / 2;
+        it.print(cx, 24, id(font_med), Color(180, 220, 255),
+                 TextAlign::TOP_CENTER, "Last 14 days");
+        const auto &counts = id(cal_counts);
+        int n = (int) counts.size();
+        int start = n - 14; if (start < 0) start = 0;
+        int m = n - start;
+        // Find max for scaling
+        int vmax = 1;
+        int vsum = 0;
+        for (int i = start; i < n; i++) { if (counts[i] > vmax) vmax = counts[i]; vsum += counts[i]; }
+        // Plot area
+        const int plot_left = 10, plot_right = W - 10;
+        const int plot_top  = 48, plot_bot   = H - 22;
+        const int plot_w = plot_right - plot_left;
+        const int plot_h = plot_bot - plot_top;
+        // Baseline
+        it.line(plot_left, plot_bot, plot_right, plot_bot, Color(60, 60, 80));
+        // Points + lines
+        int prev_x = 0, prev_y = 0;
+        for (int i = 0; i < m; i++) {
+          int v = counts[start + i];
+          int x = plot_left + (m <= 1 ? plot_w / 2 : (plot_w * i) / (m - 1));
+          int y = plot_bot - (plot_h * v) / vmax;
+          if (i > 0) it.line(prev_x, prev_y, x, y, Color(140, 220, 255));
+          it.filled_circle(x, y, 2, Color(200, 240, 255));
+          prev_x = x; prev_y = y;
+        }
+        // Summary bottom row
+        {
+          char buf[32];
+          sprintf(buf, "total %d", vsum);
+          it.print(4, H - 4, id(font_small), Color(180, 220, 255),
+                   TextAlign::BASELINE_LEFT, buf);
+          sprintf(buf, "peak %d", vmax);
+          it.print(W - 4, H - 4, id(font_small), Color(255, 220, 120),
+                   TextAlign::BASELINE_RIGHT, buf);
+        }
+      } else if (id(screensaver_frames) > 0 && id(idle_screen) == 10 && id(dependabot_ok)) {
+        // --- Dependabot alerts card ---
+        int cx = W / 2;
+        Color title_c = id(dep_open_total) > 0 ? Color(255, 160, 120) : Color(140, 255, 160);
+        it.print(cx, 24, id(font_med), title_c, TextAlign::TOP_CENTER, "Dependabot");
+        {
+          char buf[12];
+          sprintf(buf, "%d", id(dep_open_total));
+          Color num_c = id(dep_open_total) == 0 ? Color(140, 255, 160) :
+                        id(dep_open_total) < 5  ? Color(255, 220, 120) :
+                                                   Color(255, 120, 120);
+          it.print(cx, 46, id(font_big), num_c, TextAlign::TOP_CENTER, buf);
+          const char *sub = id(dep_open_total) == 0 ? "all clear" :
+                                                       "open alerts";
+          it.print(cx, 78, id(font_small), Color(200, 200, 210),
+                   TextAlign::TOP_CENTER, sub);
+        }
+        if (id(dep_open_total) > 0) {
+          char buf[48];
+          sprintf(buf, "%d repos", id(dep_repos_affected));
+          it.print(4, H - 4, id(font_small), Color(255, 200, 140),
+                   TextAlign::BASELINE_LEFT, buf);
+          const std::string &tr = id(dep_top_repo);
+          if (!tr.empty()) {
+            sprintf(buf, "%s %d", tr.c_str(), id(dep_top_repo_count));
+            it.print(W - 4, H - 4, id(font_small), Color(255, 160, 120),
+                     TextAlign::BASELINE_RIGHT, buf);
+          }
+        }
+      } else {
+        // DVD-bouncer github logo
+        static const Color palette[5] = {
+          Color(120, 220, 255),
+          Color(180, 140, 255),
+          Color(255, 220, 120),
+          Color(140, 255, 160),
+          Color(255, 160, 200),
+        };
+        Color c = palette[id(gh_color_idx) % 5];
+        it.print(id(gh_x), id(gh_y), id(mdi_big), c, "\U000F02A4");
+      }
+

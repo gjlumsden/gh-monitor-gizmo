@@ -1,0 +1,314 @@
+globals:
+  - id: last_top_event_id
+    type: std::string
+    restore_value: no
+    initial_value: '""'
+
+  - id: user_retry_pending
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+
+  # Copilot usage card
+  - id: copilot_retry_pending
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: copilot_ok
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: copilot_qty
+    type: float
+    restore_value: no
+    initial_value: '0.0f'
+  - id: copilot_net
+    type: float
+    restore_value: no
+    initial_value: '0.0f'
+  - id: copilot_sku
+    type: std::string
+    restore_value: no
+    initial_value: '""'
+
+  # Permanent-disable flags. Flipped to true on the first 401/403/404 from
+  # the endpoint, and cleared only on reboot. Stops log spam / wasted
+  # requests for endpoints the current token isn't permitted to hit
+  # (e.g. billing on Enterprise unlimited).
+  - id: copilot_disabled
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: stats_disabled
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+
+  # Contributions + PR stats (from GraphQL contributionsCollection + search)
+  - id: stats_retry_pending
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: stats_ok
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: cal_retry_pending
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: commits_today
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: commits_week
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: commits_year
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: prs_today
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: prs_week
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: prs_year
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: reviews_week
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: issues_week
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: prs_open
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: prs_merged_week
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: prs_review_requested
+    type: int
+    restore_value: no
+    initial_value: '0'
+
+  # Rate limit probe (GET /rate_limit) - free info: core budget remaining,
+  # and Copilot buckets if the account exposes them.
+  - id: ratelimit_retry_pending
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: ratelimit_ok
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: rl_core_used
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: rl_core_limit
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: rl_core_reset
+    type: uint32_t
+    restore_value: no
+    initial_value: '0'
+  - id: rl_copilot_used
+    type: int
+    restore_value: no
+    initial_value: '-1'   # -1 = bucket not exposed on this account
+  - id: rl_copilot_limit
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: rl_copilot_reset
+    type: uint32_t
+    restore_value: no
+    initial_value: '0'
+
+  # Idle screen selection. The DVD bouncer (index 0) is the default;
+  # every ~60s we flash one info card for ~10s and then return to the
+  # bouncer. Index chosen at flash time among available cards:
+  # 0 = DVD bouncer (always available),
+  # 1 = copilot usage, 2 = contributions, 3 = PRs, 4 = CI donut,
+  # 5 = rate limit, 6 = streak & best day, 7 = issues,
+  # 8 = heatmap, 9 = sparkline, 10 = dependabot.
+  - id: idle_screen
+    type: int
+    restore_value: no
+    initial_value: '0'
+
+  # Streak / best-day / calendar (derived from contributionsCollection
+  # calendar). cal_counts holds the most-recent ~5 weeks of daily
+  # contribution counts (oldest first, clamped to 0..255 for display
+  # purposes - actual counts can be higher but colour bucketing is the
+  # only use). cal_start_weekday is the weekday (0=Sun..6=Sat) of
+  # cal_counts[0] so the heatmap can be laid out correctly.
+  - id: streak_days
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: best_day_count
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: best_day_weekday
+    type: int
+    restore_value: no
+    initial_value: '-1'
+  - id: cal_counts
+    type: std::vector<uint8_t>
+    restore_value: no
+  - id: cal_start_weekday
+    type: int
+    restore_value: no
+    initial_value: '0'
+
+  # Issues card
+  - id: issues_assigned_open
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: issues_authored_open
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: issues_closed_week
+    type: int
+    restore_value: no
+    initial_value: '0'
+
+  # Dependabot alerts aggregation
+  - id: dependabot_retry_pending
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: dependabot_ok
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: dependabot_disabled
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: dep_open_total
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: dep_repos_affected
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: dep_top_repo
+    type: std::string
+    restore_value: no
+    initial_value: '""'
+  - id: dep_top_repo_count
+    type: int
+    restore_value: no
+    initial_value: '0'
+
+  # Idle-screen flash cycle. The default idle screen is the DVD
+  # bouncer. Every screensaver_cooldown ticks we pick the next
+  # available info card and show it for screensaver_frames ticks,
+  # then go back to the bouncer. Event mode preempts everything and
+  # resets both counters.
+  - id: screensaver_frames
+    type: int
+    restore_value: no
+    initial_value: '0'        # 0 = bouncer; >0 = card currently flashed
+  - id: screensaver_cooldown
+    type: int
+    restore_value: no
+    initial_value: '120'      # first card after ~30s idle
+
+  # CI tallies from the most recent page of events
+  - id: ci_running
+    type: int
+    initial_value: '0'
+  - id: ci_success
+    type: int
+    initial_value: '0'
+  - id: ci_failed
+    type: int
+    initial_value: '0'
+
+  # Carousel queue of new events since last fetch (oldest first)
+  - id: carousel_lines
+    type: std::vector<std::string>
+    restore_value: no
+  - id: carousel_detail
+    type: std::vector<std::string>
+    restore_value: no
+  - id: carousel_copilot
+    type: std::vector<uint8_t>
+    restore_value: no
+  - id: carousel_ci_fail
+    type: std::vector<uint8_t>
+    restore_value: no
+  - id: carousel_idx
+    type: int
+    initial_value: '0'
+  - id: carousel_frames
+    type: int
+    initial_value: '0'
+  # Ticks remaining in "events mode"; 0 = show DVD bouncer idle screen
+  - id: idle_frames
+    type: int
+    initial_value: '0'
+
+  # Beep handoff from fetch lambda to the outer rtttl action
+  - id: pending_beep
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: pending_beep_fail
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  # Beep handoff for screensaver info-card flashes
+  - id: pending_card_beep
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+
+  # Night mode: true while inside the sleep window, cleared by the
+  # apply_screen_power script. wake_frames counts down in 250ms ticks
+  # while a button-press temporarily overrides sleep.
+  - id: screen_asleep
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: wake_frames
+    type: int
+    restore_value: no
+    initial_value: '0'
+
+  # DVD-bouncer github logo state
+  - id: gh_x
+    type: int
+    initial_value: '20'
+  - id: gh_y
+    type: int
+    initial_value: '40'
+  - id: gh_vx
+    type: int
+    initial_value: '3'
+  - id: gh_vy
+    type: int
+    initial_value: '2'
+  - id: gh_color_idx
+    type: int
+    initial_value: '0'
+

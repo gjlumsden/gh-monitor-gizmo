@@ -1,0 +1,168 @@
+substitutions:
+  rotate_display: "90"   # 90 or 270 for landscape; swap if upside-down
+  github_user: !secret ghgizmo_github_user
+  github_token: !secret ghgizmo_github_token
+
+  # --- Night mode ---
+  # Screen (backlight) is turned off between sleep_start_hour and
+  # sleep_end_hour, local time. Button A wakes the screen for 15 s.
+  # Set both values to the same number (e.g. 0) to disable night mode.
+  sleep_start_hour: "20"   # off at 20:00
+  sleep_end_hour:   "8"    # on  at 08:00
+  # IANA timezone for the local-hour comparison above. Examples:
+  #   "Europe/London"  "America/New_York"  "Asia/Tokyo"
+  timezone: "Europe/London"
+
+  # --- Beeps ---
+  # Set to "false" to silence the short beep that plays each time a
+  # screensaver info card (Copilot / Contributions / PRs / CI / Rate
+  # Limit) appears. The new-event success/fail beeps are unaffected.
+  card_beep_enabled: "true"
+
+  # --- Networking (static IP) ---
+  # To use DHCP instead, delete the `manual_ip:` block in `wifi:` below;
+  # these substitutions then become unused and can be removed.
+  static_ip: "192.168.4.10"
+  gateway:   "192.168.4.1"
+  subnet:    "255.255.255.0"
+  dns1:      "1.1.1.1"
+  dns2:      "8.8.8.8"
+
+esphome:
+  name: ghmonitorgizmo
+  friendly_name: GH Monitor Gizmo
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+    advanced:
+      # Bootloader supports SRAM1 as IRAM on this chip; reclaim ~40KB
+      # of code space. Silences the warning at boot.
+      sram1_as_iram: true
+    sdkconfig_options:
+      CONFIG_LWIP_MAX_SOCKETS: "16"
+      CONFIG_MBEDTLS_SSL_OUT_CONTENT_LEN: "4096"
+      CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN: "16384"
+      CONFIG_MBEDTLS_DYNAMIC_BUFFER: y
+      CONFIG_MBEDTLS_DYNAMIC_FREE_CONFIG_DATA: y
+      CONFIG_MBEDTLS_DYNAMIC_FREE_CA_CERT: y
+
+# !include ../common/network.yaml
+i2c:
+  id: bus_a
+  sda: GPIO21
+  scl: GPIO22
+  scan: true
+
+# --- Buzzer on GPIO2 (M5StickC Plus) ---
+output:
+  - platform: ledc
+    pin: GPIO2
+    id: buzzer_out
+
+rtttl:
+  id: buzzer
+  output: buzzer_out
+
+binary_sensor:
+  - platform: gpio
+    pin:
+      number: GPIO37
+      inverted: true
+      mode:
+        input: true
+    name: "Button A"
+    id: btn_a
+    on_press:
+      then:
+        - lambda: |-
+            // Dismiss: drop straight back to idle
+            id(idle_frames) = 0;
+            id(carousel_lines).clear();
+            id(carousel_copilot).clear();
+            id(carousel_ci_fail).clear();
+            id(carousel_detail).clear();
+            id(carousel_idx) = 0;
+            id(carousel_frames) = 0;
+            // Wake the screen for ~15 s if we're in night mode
+            id(wake_frames) = 60;
+        - script.execute: apply_screen_power
+
+# --- FONTS ---
+# !include ../common/fonts.yaml
+# !include ../common/globals.yaml
+# !include ../common/intervals.yaml
+script:
+  # Compute whether we should be asleep based on local hour and the
+  # sleep_start_hour / sleep_end_hour substitutions, then enable or
+  # disable the M5StickC Plus backlight (AXP192 LDO2, reg 0x12 bit 2).
+  - id: apply_screen_power
+    mode: restart
+    then:
+      - lambda: |-
+          auto now = id(sntp_time).now();
+          bool sleep = false;
+          if (now.is_valid()) {
+            int h = now.hour;
+            const int s = ${sleep_start_hour};
+            const int e = ${sleep_end_hour};
+            if (s == e)      sleep = false;
+            else if (s < e)  sleep = (h >= s && h < e);
+            else             sleep = (h >= s || h < e);
+          }
+          id(screen_asleep) = sleep;
+          bool want_on = !sleep || id(wake_frames) > 0 || id(idle_frames) > 0;
+
+          // Toggle AXP192 LDO2 (backlight) via I2C: reg 0x12 bit 2
+          uint8_t reg = 0x12;
+          uint8_t v;
+          if (id(bus_a)->write(0x34, &reg, 1, false) != i2c::ERROR_OK) return;
+          if (id(bus_a)->read(0x34, &v, 1) != i2c::ERROR_OK) return;
+          uint8_t nv = want_on ? (v | 0x04) : (v & ~0x04);
+          if (nv != v) {
+            uint8_t buf[2] = { 0x12, nv };
+            id(bus_a)->write(0x34, buf, 2);
+          }
+
+# !include ../common/scripts.yaml
+spi:
+  clk_pin: GPIO13
+  mosi_pin: GPIO15
+
+display:
+  - platform: st7789v
+    model: CUSTOM
+    id: main_display
+    cs_pin: GPIO5
+    dc_pin: GPIO23
+    reset_pin: GPIO18
+    rotation: ${rotate_display}
+    height: 240
+    width: 135
+    offset_height: 40
+    offset_width: 52
+    update_interval: 250ms
+    lambda: |-
+# !include ../common/display_lambda.yaml
+sensor:
+  - platform: template
+    name: "Battery Level"
+    id: battery_level
+    unit_of_measurement: "%"
+    accuracy_decimals: 0
+    update_interval: 60s
+    lambda: |-
+      // AXP192 battery voltage: reg 0x78 (hi 8 bits) + 0x79 (lo 4 bits), 1.1 mV/LSB
+      uint8_t reg = 0x78;
+      if (id(bus_a)->write(0x34, &reg, 1, false) != i2c::ERROR_OK) return NAN;
+      uint8_t buf[2];
+      if (id(bus_a)->read(0x34, buf, 2) != i2c::ERROR_OK) return NAN;
+      uint16_t raw = ((uint16_t) buf[0] << 4) | (buf[1] & 0x0F);
+      float v = raw * 1.1f / 1000.0f;
+      // Map 3.00 V = 0%, 4.15 V = 100% (M5StickC Plus tops out ~4.17 V;
+      // this gives a true 100% at full charge without clipping too early).
+      float pct = (v - 3.0f) / 1.15f * 100.0f;
+      if (pct < 0) pct = 0;
+      if (pct > 100) pct = 100;
+      return pct;

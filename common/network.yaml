@@ -1,0 +1,45 @@
+logger:
+  level: WARN
+
+api:
+  encryption:
+    key: !secret ghgizmo_api_encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ghgizmo_ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+  # Static IP. Remove this whole `manual_ip:` block to use DHCP.
+  manual_ip:
+    static_ip: ${static_ip}
+    gateway: ${gateway}
+    subnet: ${subnet}
+    dns1: ${dns1}
+    dns2: ${dns2}
+
+  ap:
+    ssid: "GH Monitor Gizmo"
+    password: !secret ghgizmo_ap_password
+
+http_request:
+  useragent: "esphome-m5stick"
+  timeout: 15s
+  verify_ssl: false
+  follow_redirects: true
+  buffer_size_rx: 12288
+  buffer_size_tx: 1024
+
+# Time: used for the rate-limit reset countdown. SNTP is fire-and-forget;
+# if the network is down the card just hides the countdown.
+time:
+  - platform: sntp
+    id: sntp_time
+    timezone: ${timezone}
+    servers:
+      - "pool.ntp.org"
+      - "time.cloudflare.com"
+

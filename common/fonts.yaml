@@ -1,0 +1,34 @@
+font:
+  - file: "gfonts://Roboto"
+    id: font_small
+    size: 14
+  - file: "gfonts://Roboto@700"
+    id: font_med
+    size: 18
+  - file: "gfonts://Roboto@900"
+    id: font_big
+    size: 26
+  # Material Design Icons - for the idle cycle and per-line icons
+  - file: "https://github.com/Templarian/MaterialDesign-Webfont/raw/master/fonts/materialdesignicons-webfont.ttf"
+    id: mdi_big
+    size: 64
+    glyphs:
+      - "\U000F02A4"   # mdi:github
+  - file: "https://github.com/Templarian/MaterialDesign-Webfont/raw/master/fonts/materialdesignicons-webfont.ttf"
+    id: mdi_copilot
+    size: 18
+    glyphs:
+      - "\U000F06A9"   # mdi:robot  (Copilot marker)
+  - file: "https://github.com/Templarian/MaterialDesign-Webfont/raw/master/fonts/materialdesignicons-webfont.ttf"
+    id: mdi_copilot_big
+    size: 40
+    glyphs:
+      - "\U000F06A9"   # mdi:robot (big Copilot card icon)
+  - file: "https://github.com/Templarian/MaterialDesign-Webfont/raw/master/fonts/materialdesignicons-webfont.ttf"
+    id: mdi_status
+    size: 14
+    glyphs:
+      - "\U000F0453"   # mdi:sync (running)
+      - "\U000F012C"   # mdi:check (success)
+      - "\U000F0156"   # mdi:close (failed)
+

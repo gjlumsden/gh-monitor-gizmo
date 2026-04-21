@@ -1,0 +1,185 @@
+interval:
+  - interval: 250ms
+    then:
+      - lambda: |-
+          // Count down the temporary wake window started by a button press
+          if (id(wake_frames) > 0) id(wake_frames) = id(wake_frames) - 1;
+
+          // Count down events-mode timer; when it hits 0 drop back to idle
+          if (id(idle_frames) > 0) {
+            id(idle_frames) = id(idle_frames) - 1;
+            if (id(idle_frames) == 0) {
+              id(carousel_lines).clear();
+              id(carousel_copilot).clear();
+              id(carousel_ci_fail).clear();
+              id(carousel_detail).clear();
+              id(carousel_idx) = 0;
+              id(carousel_frames) = 0;
+            }
+          }
+
+          // Advance carousel slide
+          if (!id(carousel_lines).empty()) {
+            if (id(carousel_frames) > 0) {
+              id(carousel_frames) = id(carousel_frames) - 1;
+            }
+            if (id(carousel_frames) == 0) {
+              int n = (int) id(carousel_lines).size();
+              id(carousel_idx) = (id(carousel_idx) + 1) % n;
+              id(carousel_frames) = 20;  // ~5s per slide at 250ms tick
+            }
+          }
+
+          // DVD-bouncer: advance only while idle
+          if (id(idle_frames) == 0) {
+            const int W = 240, H = 135;
+            const int GW = 52, GH = 64;
+            const int TOP = 22;
+            int x = id(gh_x) + id(gh_vx);
+            int y = id(gh_y) + id(gh_vy);
+            bool bounced = false;
+            if (x <= 0)         { x = 0;         id(gh_vx) = -id(gh_vx); bounced = true; }
+            else if (x >= W - GW) { x = W - GW; id(gh_vx) = -id(gh_vx); bounced = true; }
+            if (y <= TOP)       { y = TOP;       id(gh_vy) = -id(gh_vy); bounced = true; }
+            else if (y >= H - GH) { y = H - GH; id(gh_vy) = -id(gh_vy); bounced = true; }
+            id(gh_x) = x;
+            id(gh_y) = y;
+            if (bounced) id(gh_color_idx) = (id(gh_color_idx) + 1) % 5;
+          }
+
+          // Idle flash cycle.
+          //   events mode   -> preempts everything; reset flash state
+          //   showing card  -> screensaver_frames ticks down; at 0 -> bouncer
+          //   bouncer       -> screensaver_cooldown ticks down; at 0 -> pick
+          //                    the next available card and show it for 10s
+          //
+          // End-to-end: 50s bouncer, 10s card, 50s bouncer, next card, ...
+          if (id(idle_frames) > 0) {
+            // Events are showing; reset flash state so we resume from
+            // the bouncer once events clear. Leave idle_screen alone so
+            // the rotation advances past the last-shown card next time.
+            id(screensaver_frames) = 0;
+            id(screensaver_cooldown) = 200;   // ~50s bouncer before first card
+          } else if (id(screensaver_frames) > 0) {
+            id(screensaver_frames) = id(screensaver_frames) - 1;
+            if (id(screensaver_frames) == 0) {
+              // Card window ended - back to bouncer for ~50s. Keep
+              // idle_screen as the last-shown card so the next pick
+              // advances in the rotation.
+              id(screensaver_cooldown) = 200;
+            }
+          } else {
+            // Bouncer active; count down to next card flash
+            if (id(screensaver_cooldown) > 0) {
+              id(screensaver_cooldown) = id(screensaver_cooldown) - 1;
+            }
+            if (id(screensaver_cooldown) == 0) {
+              // Pick the next available card from the rotation
+              int screens[16];
+              int n = 0;
+              if (id(copilot_ok))   screens[n++] = 1;
+              if (id(stats_ok))   { screens[n++] = 2; screens[n++] = 3; }
+              if (id(ci_running) + id(ci_success) + id(ci_failed) > 0) screens[n++] = 4;
+              if (id(ratelimit_ok)) screens[n++] = 5;
+              if (id(stats_ok) && id(streak_days) + id(best_day_count) > 0) screens[n++] = 6;
+              if (id(stats_ok) && (id(issues_assigned_open) + id(issues_authored_open) + id(issues_closed_week) > 0)) screens[n++] = 7;
+              if (id(stats_ok) && !id(cal_counts).empty()) { screens[n++] = 8; screens[n++] = 9; }
+              if (id(dependabot_ok)) screens[n++] = 10;
+              if (n == 0) {
+                // Nothing to show yet - try again in ~10s
+                id(screensaver_cooldown) = 40;
+              } else {
+                int cur = id(idle_screen);
+                int next = screens[0];
+                for (int i = 0; i < n; i++) {
+                  if (screens[i] == cur) { next = screens[(i + 1) % n]; break; }
+                }
+                id(idle_screen) = next;
+                id(screensaver_frames) = 40;    // ~10s card flash
+                id(pending_card_beep) = true;
+              }
+            }
+          }
+      - if:
+          condition:
+            and:
+              - lambda: 'return id(pending_card_beep);'
+              - lambda: 'return ${card_beep_enabled};'
+          then:
+            - lambda: 'id(pending_card_beep) = false;'
+            - rtttl.play: "blip:d=32,o=6,b=300:c"
+          else:
+            - lambda: 'id(pending_card_beep) = false;'
+
+  - interval: 60s
+    startup_delay: 30s
+    then:
+      - if:
+          condition:
+            wifi.connected:
+          then:
+            - lambda: 'id(user_retry_pending) = false;'
+            - script.execute: fetch_user_events
+
+  - interval: 600s
+    startup_delay: 45s
+    then:
+      - if:
+          condition:
+            and:
+              - wifi.connected:
+              - lambda: 'return !id(copilot_disabled);'
+          then:
+            - lambda: 'id(copilot_retry_pending) = false;'
+            - script.execute: fetch_copilot_usage
+
+  - interval: 600s
+    startup_delay: 60s
+    then:
+      - if:
+          condition:
+            and:
+              - wifi.connected:
+              - lambda: 'return !id(stats_disabled);'
+          then:
+            - lambda: 'id(stats_retry_pending) = false;'
+            - script.execute: fetch_stats_graphql
+
+  - interval: 900s
+    startup_delay: 75s
+    then:
+      - if:
+          condition:
+            wifi.connected:
+          then:
+            - lambda: 'id(cal_retry_pending) = false;'
+            - script.execute: fetch_cal_graphql
+
+  - interval: 600s
+    startup_delay: 90s
+    then:
+      - if:
+          condition:
+            wifi.connected:
+          then:
+            - lambda: 'id(ratelimit_retry_pending) = false;'
+            - script.execute: fetch_rate_limit
+
+  - interval: 900s
+    startup_delay: 120s
+    then:
+      - if:
+          condition:
+            and:
+              - wifi.connected:
+              - lambda: 'return !id(dependabot_disabled);'
+          then:
+            - lambda: 'id(dependabot_retry_pending) = false;'
+            - script.execute: fetch_dependabot_graphql
+
+  # Recompute night-mode state every 30 s. apply_screen_power also
+  # runs on button press and on boot to sync backlight with state.
+  - interval: 30s
+    then:
+      - script.execute: apply_screen_power
+

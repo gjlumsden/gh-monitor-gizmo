@@ -119,9 +119,16 @@ flash and subsequent OTA updates.
    `wifi:` `ap.password` values, and paste them as the values of
    `ghgizmo_api_encryption_key` and `ghgizmo_ap_password` in
    `secrets.yaml`. Fill in the Wi-Fi, GitHub, and OTA keys too.
-4. Back in the ESPHome dashboard, click **EDIT** on the tile you just
-   created and replace the entire contents with
-   [`ghmonitorgizmo.yaml`](ghmonitorgizmo.yaml) from this repo. Save.
+4. Grab the single-file YAML for your hardware from the latest
+   [GitHub Release][releases]:
+
+   | Device | File |
+   |---|---|
+   | M5StickC Plus 1.1 | `ghmonitorgizmo-cplus.yaml` |
+
+   Back in the ESPHome dashboard, click **EDIT** on the tile you just
+   created and replace the entire contents with the downloaded YAML.
+   Save.
 5. Click **INSTALL → Plug into the computer running ESPHome Dashboard**
    for the first flash. All subsequent installs
    can use **Wirelessly**.
@@ -131,6 +138,12 @@ and exposes a **Battery Level** sensor.
 
 ### Option 2 – ESPHome CLI
 
+This repo stores the firmware as **source templates** under
+[`m5stickcplus/`](m5stickcplus/) with shared partials in
+[`common/`](common/). Run [`build.py`](build.py) to inline the
+includes into a single self-contained YAML in `dist/`, then point
+`esphome` at it.
+
 ```powershell
 pipx install esphome   # or: pip install --user esphome
 
@@ -139,14 +152,19 @@ cd gh-monitor-gizmo
 copy secrets.yaml.example secrets.yaml
 notepad secrets.yaml   # fill in the values
 
+# build the single-file YAML
+python build.py
+
 # first flash over USB
-esphome run ghmonitorgizmo.yaml
+esphome run dist/ghmonitorgizmo-cplus.yaml
 
 # later updates over Wi-Fi
-esphome run ghmonitorgizmo.yaml --device ghmonitorgizmo.local
+esphome run dist/ghmonitorgizmo-cplus.yaml --device ghmonitorgizmo.local
 ```
 
-Full CLI docs: <https://esphome.io/guides/getting_started_command_line>
+`build.py` uses only the Python standard library (no `pip install`
+needed). Full ESPHome CLI docs:
+<https://esphome.io/guides/getting_started_command_line>
 
 ## Creating a GitHub token
 
@@ -206,9 +224,9 @@ See [`secrets.yaml.example`](secrets.yaml.example) for the template.
 
 ## Configuration notes
 
-- `ghmonitorgizmo.yaml` sets `verify_ssl: false` because mbedTLS on
-  ESP-IDF doesn't ship the GitHub CA chain by default. All GitHub
-  traffic still goes over TLS; only chain verification is skipped.
+- The firmware sets `verify_ssl: false` because mbedTLS on ESP-IDF
+  doesn't ship the GitHub CA chain by default. All GitHub traffic
+  still goes over TLS; only chain verification is skipped.
 - **Wi-Fi**: the device is a 2.4 GHz-only ESP32. It needs an SSID
   that's broadcast on 2.4 GHz (if your router advertises the same
   SSID on both bands, that's fine), with WPA2-Personal or
@@ -220,12 +238,12 @@ See [`secrets.yaml.example`](secrets.yaml.example) for the template.
   from `ghgizmo_ap_password` – connect to it and browse to
   `http://192.168.4.1` to reconfigure.
 - Static IP is set via the `static_ip` / `gateway` / `subnet` / `dns1`
-  / `dns2` **substitutions** at the top of `ghmonitorgizmo.yaml`.
+  / `dns2` **substitutions** at the top of the installed YAML.
   Adjust them to match your network, or delete the `manual_ip:` block
   under `wifi:` entirely to use DHCP instead.
 - **Night mode** is controlled by the `sleep_start_hour`,
-  `sleep_end_hour` and `timezone` substitutions at the top of
-  `ghmonitorgizmo.yaml`. Hours are 0–23 in the given IANA timezone
+  `sleep_end_hour` and `timezone` substitutions at the top of the
+  installed YAML. Hours are 0–23 in the given IANA timezone
   (e.g. `Europe/London`, `America/New_York`). The window may wrap
   midnight (e.g. `20` → `8`). Set `sleep_start_hour` equal to
   `sleep_end_hour` to disable night mode entirely.
@@ -285,6 +303,47 @@ See [`secrets.yaml.example`](secrets.yaml.example) for the template.
 
 ## Development
 
+The firmware is maintained as a set of source templates so common
+logic (fetch scripts, display lambda, globals, intervals) is shared
+across hardware variants, and the installable artefact is a single
+self-contained YAML per device.
+
+```
+gh-gizmo/
+├── common/                # shared YAML fragments
+│   ├── network.yaml       # logger / api / ota / wifi / http_request / time
+│   ├── fonts.yaml
+│   ├── globals.yaml
+│   ├── intervals.yaml
+│   ├── scripts.yaml       # GitHub fetch scripts (user events, copilot, stats, ...)
+│   └── display_lambda.yaml
+├── m5stickcplus/
+│   └── ghmonitorgizmo.yaml.src   # M5StickC Plus 1.1 source template
+├── dist/                  # build output (gitignored)
+│   └── ghmonitorgizmo-cplus.yaml
+├── build.py               # inlines `# !include` markers into dist/
+└── .github/workflows/build.yml   # CI: builds on push, releases on tag
+```
+
+`build.py` reads each device's `.yaml.src` template and replaces every
+`# !include <path>` line with the verbatim contents of the referenced
+fragment, producing a single self-contained YAML that Home Assistant's
+ESPHome Builder add-on can install directly (no `packages:` /
+`!include` support required there).
+
+```powershell
+# build every device
+python build.py
+
+# build a single source to a custom output
+python build.py m5stickcplus/ghmonitorgizmo.yaml.src -o dist/foo.yaml
+```
+
+The GitHub Actions workflow runs `build.py` on every push, verifies
+idempotency (running twice produces identical output), and on tagged
+releases (`v*`) attaches the built YAMLs as downloadable release
+assets.
+
 For editing the YAML locally, the
 [ESPHome VS Code extension][vscode-ext] is very useful – it gives you
 schema validation, autocomplete, and inline docs for every component.
@@ -302,6 +361,7 @@ schema validation, autocomplete, and inline docs for every component.
 [MIT](LICENSE)
 
 [m5]: https://docs.m5stack.com/en/core/m5stickc_plus
+[releases]: https://github.com/gjlumsden/gh-monitor-gizmo/releases/latest
 [esphome]: https://esphome.io/
 [esphome-install]: https://esphome.io/guides/installing_esphome
 [ha-addon]: https://my.home-assistant.io/redirect/supervisor_addon/?addon=5c53de3b_esphome
