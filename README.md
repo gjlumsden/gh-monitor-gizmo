@@ -21,65 +21,66 @@ telemetry (Home Assistant variant).
 
 ![gh-monitor-gizmo running on an M5StickC Plus 1.1](images/m5stick-cplus-1.1-gh-gizmo.png)
 
+## ⚠ Display longevity and battery warning — READ BEFORE USE
+
 > [!WARNING]
-> ## ⚠ Display longevity and battery warning — READ BEFORE USE
->
 > **This applies to every owner of every supported device.** Do not
-> skim past it.
->
-> ### Backlight burnout (Plus 1.1 at highest risk)
->
-> Both boards use a small ST7789 IPS LCD, but their backlights behave
-> very differently:
->
-> - **M5StickC Plus 1.1** – the backlight LED string is driven by
->   the [AXP192 PMIC][axp192-doc]'s LDO2 rail at a **fixed voltage
->   with no PWM**. While the display is on, the LEDs run at 100%
->   drive current, constantly. In 24/7 use this *will* shorten the
->   backlight's life: at least one user of this firmware has already
->   had the backlight die outright (display content still rendered,
->   but no illumination). In addition, the 120 mAh Li-ion cell is
->   continuously trickle-charged while USB is plugged, which over
->   months is known to cause cell swelling and can physically stress
->   the display.
->
->   This warning **likely also applies** to the original M5StickC and
->   to the M5StickC Plus2 (both share the same AXP192-driven backlight
->   topology), but this firmware has not been tested on either of
->   those boards.
->
-> - **M5Stick S3 (K150)** – the backlight is PWM-dimmable on GPIO38
->   (default `backlight_brightness: "0.6"`), which reduces effective
->   LED current and heat. Risk is materially lower but not zero: at
->   100% brightness 24/7 the same degradation path exists.
->
-> **You cannot firmware-dim the Plus 1.1's backlight.** The only
-> defences that exist are time-based, and the firmware already ships
-> them on by default – leave them on:
->
-> - Night-mode hours (`sleep_start_hour` / `sleep_end_hour`, default
->   20:00 → 08:00) blank the screen overnight.
-> - Idle-UI auto-sleep (`idle_screen_off_cycles`, default `1`) turns
->   the backlight off after one carousel rotation when there's
->   nothing new to show.
->
-> For Plus 1.1 24/7 deployments specifically, consider widening the
-> night-mode window (e.g. `20` → `9`) and leaving
-> `idle_screen_off_cycles: "1"`. See
-> [Screen protection](#configuration-notes) below for the full
-> tuning guide. Treat the Plus 1.1 display as a consumable with a
-> finite lifetime; the S3 is the better long-term choice.
->
-> ### Battery life / power expectations (all devices)
->
-> This firmware is Wi-Fi-heavy (HTTPS polls every 60 s plus periodic
-> extra cards) and drives the display continuously. Neither the
-> Plus 1.1's 120 mAh cell nor the S3's 250 mAh cell will run it for
-> more than a few hours off-charger. **Treat both devices as
-> USB-powered appliances** and either leave them plugged into a USB
-> port permanently or recharge them very frequently. Continuous USB
-> power is also the simplest way to survive the 30 s boot delay
-> before the first fetch.
+> skim past it. Hardware failures in the field have already happened
+> on this firmware.
+
+### Backlight burnout (Plus 1.1 at highest risk)
+
+Both boards use a small ST7789 IPS LCD, but their backlights behave
+very differently:
+
+- **M5StickC Plus 1.1** – the backlight LED string is driven by
+  the [AXP192 PMIC][axp192-doc]'s LDO2 rail at a **fixed voltage
+  with no PWM**. While the display is on, the LEDs run at 100%
+  drive current, constantly. In 24/7 use this *will* shorten the
+  backlight's life: at least one user of this firmware has already
+  had the backlight die outright (display content still rendered,
+  but no illumination). In addition, the 120 mAh Li-ion cell is
+  continuously trickle-charged while USB is plugged, which over
+  months is known to cause cell swelling and can physically stress
+  the display.
+
+  This warning **likely also applies** to the original M5StickC and
+  to the M5StickC Plus2 (both share the same AXP192-driven backlight
+  topology), but this firmware has not been tested on either of
+  those boards.
+
+- **M5Stick S3 (K150)** – the backlight is PWM-dimmable on GPIO38
+  (default `backlight_brightness: "0.6"`), which reduces effective
+  LED current and heat. Risk is materially lower but not zero: at
+  100% brightness 24/7 the same degradation path exists.
+
+**You cannot firmware-dim the Plus 1.1's backlight.** The only
+defences that exist are time-based, and the firmware already ships
+them on by default – leave them on:
+
+- Night-mode hours (`sleep_start_hour` / `sleep_end_hour`, default
+  20:00 → 08:00) blank the screen overnight.
+- Idle-UI auto-sleep (`idle_screen_off_cycles`, default `1`) turns
+  the backlight off after one carousel rotation when there's
+  nothing new to show.
+
+For Plus 1.1 24/7 deployments specifically, consider widening the
+night-mode window (e.g. `20` → `9`) and leaving
+`idle_screen_off_cycles: "1"`. See
+[Screen protection](#configuration-notes) below for the full
+tuning guide. Treat the Plus 1.1 display as a consumable with a
+finite lifetime; the S3 is the better long-term choice.
+
+### Battery life / power expectations (all devices)
+
+This firmware is Wi-Fi-heavy (HTTPS polls every 60 s plus periodic
+extra cards) and drives the display continuously. Neither the
+Plus 1.1's 120 mAh cell nor the S3's 250 mAh cell will run it for
+more than a few hours off-charger. **Treat both devices as
+USB-powered appliances** and either leave them plugged into a USB
+port permanently or recharge them very frequently. Continuous USB
+power is also the simplest way to survive the 30 s boot delay
+before the first fetch.
 
 ## Features
 
