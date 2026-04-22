@@ -93,92 +93,50 @@ Choose one:
 
 ## Prerequisites
 
-- [ESPHome][esphome] 2026.4 or later – either the
-  [Home Assistant ESPHome Builder add-on][ha-addon] (easiest) or the
-  [standalone ESPHome CLI][esphome-install]
+- [ESPHome][esphome] 2026.4 or later – pick the toolchain that
+  matches your chosen install path:
+  - [ESPHome Builder add-on][ha-addon] inside Home Assistant, or
+  - [ESPHome CLI][esphome-install] locally, or
+  - [web.esphome.io][espweb-flash] (browser-only, Chrome/Edge).
 - A GitHub personal access token – see
   [Creating a GitHub token](#creating-a-github-token)
 - A 2.4 GHz Wi-Fi network the device can reach
 
 ## Installation
 
-### Option 1 – Home Assistant ESPHome Builder (recommended)
+### Choose your variant
 
-This is the easiest path: Home Assistant handles both the first USB
-flash and subsequent OTA updates.
+The firmware ships in two flavours per hardware:
 
-1. Install the [ESPHome Builder add-on][ha-addon] from
-   **Settings → Add-ons → Add-on Store**. Start it and open the web UI.
-2. Click **+ NEW DEVICE**, pick any name, accept the defaults, and let
-   it do the initial flash. This gives you two things:
-   - The board in a known-good ESPHome state with a working USB
-     toolchain.
-   - An auto-generated **API encryption key** (and an AP fallback
-     password) written *into the device's own YAML* by the wizard –
-     **not** into `secrets.yaml`. You'll copy them across in the next
-     step.
-3. Open `secrets.yaml` in the ESPHome dashboard itself (top-right
-   menu → **Secrets**) – or via the
-   [File editor add-on][ha-fileeditor], the
-   [Samba share add-on][ha-samba], or
-   [Studio Code Server][ha-vscode] under `/config/esphome/secrets.yaml`.
-   Add the `ghgizmo_*` keys from
-   [`secrets.yaml.example`](secrets.yaml.example), then go back to the
-   auto-generated device's YAML, copy its `api:` `encryption.key` and
-   `wifi:` `ap.password` values, and paste them as the values of
-   `ghgizmo_api_encryption_key` and `ghgizmo_ap_password` in
-   `secrets.yaml`. Fill in the Wi-Fi, GitHub, and OTA keys too.
-4. Grab the single-file YAML for your hardware from the latest
-   [GitHub Release][releases]:
+- **Home Assistant variant** – enables the ESPHome [native API][espapi]
+  so the gizmo appears as a device in HA with entities for battery %
+  (and on the S3, charging + USB voltage). Recommended if you already
+  run HA.
+- **Standalone variant** – no HA integration. Instead the firmware
+  exposes ESPHome's built-in [web UI][espweb] on port 80 and falls
+  back to a [captive portal][espcp] for first-boot Wi-Fi. Use this if
+  you don't run HA or want to flash from a browser only.
 
-   | Device | File |
-   |---|---|
-   | M5StickC Plus 1.1 | `ghmonitorgizmo-cplus.yaml` |
-   | M5Stick S3 (K150) | `ghmonitorgizmo-s3.yaml` |
+|                       | Home Assistant (native API)              | Standalone (built-in web UI)                    |
+|-----------------------|------------------------------------------|-------------------------------------------------|
+| **M5StickC Plus 1.1** | `ghmonitorgizmo-cplus-ha.yaml`           | `ghmonitorgizmo-cplus-standalone.yaml`          |
+| **M5Stick S3 (K150)** | `ghmonitorgizmo-s3-ha.yaml`              | `ghmonitorgizmo-s3-standalone.yaml`             |
 
-   Back in the ESPHome dashboard, click **EDIT** on the tile you just
-   created and replace the entire contents with the downloaded YAML.
-   Save.
-5. Click **INSTALL → Plug into the computer running ESPHome Dashboard**
-   for the first flash. All subsequent installs
-   can use **Wirelessly**.
+Download the matching YAML from the latest [GitHub Release][releases]
+and follow the install guide for your variant:
 
-After install, the device auto-discovers as a new ESPHome integration
-and exposes a **Battery Level** sensor.
+- **Home Assistant** – [docs/INSTALL-ha.md](docs/INSTALL-ha.md) – use
+  the [ESPHome Builder add-on][ha-addon] to flash and OTA-update.
+- **Standalone (browser)** –
+  [docs/INSTALL-standalone-web.md](docs/INSTALL-standalone-web.md) –
+  flash from Chrome/Edge with [web.esphome.io][espweb-flash]; no local
+  toolchain required beyond a one-off compile.
+- **Standalone (CLI)** –
+  [docs/INSTALL-standalone-cli.md](docs/INSTALL-standalone-cli.md) –
+  the classic [`esphome run`][espcli-guide] flow.
 
-### Option 2 – ESPHome CLI
-
-This repo stores the firmware as **source templates** under
-[`m5stickcplus/`](m5stickcplus/) and [`m5sticks3/`](m5sticks3/) with
-shared partials in [`common/`](common/). Run [`build.py`](build.py) to
-inline the includes into a single self-contained YAML per device in
-`dist/`, then point `esphome` at the one you want.
-
-```powershell
-pipx install esphome   # or: pip install --user esphome
-
-git clone https://github.com/gjlumsden/gh-monitor-gizmo.git
-cd gh-monitor-gizmo
-copy secrets.yaml.example secrets.yaml
-notepad secrets.yaml   # fill in the values
-
-# build every device into dist/
-python build.py
-
-# first flash over USB - pick the matching device
-esphome run dist/ghmonitorgizmo-cplus.yaml    # M5StickC Plus 1.1
-esphome run dist/ghmonitorgizmo-s3.yaml       # M5Stick S3
-
-# later updates over Wi-Fi
-esphome run dist/ghmonitorgizmo-cplus.yaml --device ghmonitorgizmo.local
-esphome run dist/ghmonitorgizmo-s3.yaml --device ghmonitorgizmo-s3.local
-```
-
-`build.py` uses only the Python standard library (no `pip install`
-needed). Full ESPHome CLI docs:
-<https://esphome.io/guides/getting_started_command_line>
-
-## Creating a GitHub token
+All three paths share the same `secrets.yaml` format; see
+[`secrets.yaml.example`](secrets.yaml.example).## Creating a GitHub token
 
 The device always polls `GET /users/{user}/events` for the events
 carousel. Optional extra cards each want their own fine-grained
@@ -228,9 +186,9 @@ the `ghgizmo_*` entries:
 | `wifi_ssid` / `wifi_password` | Shared Wi-Fi (not prefixed; re-used across devices) |
 | `ghgizmo_github_user` | Your GitHub username |
 | `ghgizmo_github_token` | Personal access token |
-| `ghgizmo_api_encryption_key` | ESPHome ↔ Home Assistant encryption key |
+| `ghgizmo_api_encryption_key` | ESPHome ↔ Home Assistant encryption key (HA variant only; ignored by standalone) |
 | `ghgizmo_ota_password` | OTA update password |
-| `ghgizmo_ap_password` | Fallback AP password (if Wi-Fi unavailable) |
+| `ghgizmo_ap_password` | Fallback AP password (also the captive-portal password for the standalone variant) |
 
 See [`secrets.yaml.example`](secrets.yaml.example) for the template.
 
@@ -341,35 +299,47 @@ self-contained YAML per device.
 ```
 gh-gizmo/
 ├── common/                # shared YAML fragments
-│   ├── network.yaml       # logger / api / ota / wifi / http_request / time
+│   ├── network.yaml       # logger / ota / wifi / http_request / time
 │   ├── fonts.yaml
 │   ├── globals.yaml
 │   ├── intervals.yaml
 │   ├── scripts.yaml       # GitHub fetch scripts (user events, copilot, stats, ...)
-│   └── display_lambda.yaml
+│   ├── display_lambda.yaml
+│   └── variants/
+│       ├── ha/api.yaml          # HA variant: native ESPHome API
+│       └── standalone/api.yaml  # standalone variant: web_server + captive_portal
 ├── m5stickcplus/
 │   └── ghmonitorgizmo.yaml.src      # M5StickC Plus 1.1 source template
 ├── m5sticks3/
 │   └── ghmonitorgizmo-s3.yaml.src   # M5Stick S3 (K150) source template
+├── docs/                  # install guides, one per methodology
+│   ├── INSTALL-ha.md
+│   ├── INSTALL-standalone-web.md
+│   └── INSTALL-standalone-cli.md
 ├── dist/                  # build output (gitignored)
-│   ├── ghmonitorgizmo-cplus.yaml
-│   └── ghmonitorgizmo-s3.yaml
-├── build.py               # inlines `# !include` markers into dist/
+│   ├── ghmonitorgizmo-cplus-ha.yaml
+│   ├── ghmonitorgizmo-cplus-standalone.yaml
+│   ├── ghmonitorgizmo-s3-ha.yaml
+│   └── ghmonitorgizmo-s3-standalone.yaml
+├── build.py               # inlines `# !include` + `# !include_variant` into dist/
 └── .github/workflows/build.yml   # CI: builds on push, releases on tag
 ```
 
-`build.py` reads each device's `.yaml.src` template and replaces every
-`# !include <path>` line with the verbatim contents of the referenced
-fragment, producing a single self-contained YAML that Home Assistant's
-ESPHome Builder add-on can install directly (no `packages:` /
-`!include` support required there).
+`build.py` reads each device's `.yaml.src` template and replaces
+`# !include <path>` lines with the verbatim contents of the referenced
+fragment. `# !include_variant <name>` resolves to
+`common/variants/<variant>/<name>` where `<variant>` is `ha` or
+`standalone`, producing four single-file YAMLs that Home Assistant's
+ESPHome Builder add-on, the ESPHome CLI, or [web.esphome.io][espweb-flash]
+can install directly (no `packages:` / `!include` support required on
+the install side).
 
 ```powershell
-# build every device
+# build every device-variant (four outputs)
 python build.py
 
 # build a single source to a custom output
-python build.py m5stickcplus/ghmonitorgizmo.yaml.src -o dist/foo.yaml
+python build.py m5stickcplus/ghmonitorgizmo.yaml.src --variant standalone -o dist/foo.yaml
 ```
 
 The GitHub Actions workflow runs `build.py` on every push, verifies
@@ -399,6 +369,11 @@ schema validation, autocomplete, and inline docs for every component.
 [releases]: https://github.com/gjlumsden/gh-monitor-gizmo/releases/latest
 [esphome]: https://esphome.io/
 [esphome-install]: https://esphome.io/guides/installing_esphome
+[espapi]: https://esphome.io/components/api
+[espweb]: https://esphome.io/components/web_server
+[espcp]: https://esphome.io/components/captive_portal
+[espweb-flash]: https://web.esphome.io/
+[espcli-guide]: https://esphome.io/guides/getting_started_command_line
 [ha-addon]: https://my.home-assistant.io/redirect/supervisor_addon/?addon=5c53de3b_esphome
 [ha-esphome]: https://www.home-assistant.io/integrations/esphome/
 [ha-fileeditor]: https://my.home-assistant.io/redirect/supervisor_addon/?addon=core_configurator

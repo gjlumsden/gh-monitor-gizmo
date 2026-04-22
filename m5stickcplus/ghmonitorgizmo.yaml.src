@@ -69,6 +69,7 @@ esp32:
       CONFIG_MBEDTLS_DYNAMIC_FREE_CA_CERT: y
 
 # !include ../common/network.yaml
+# !include_variant api.yaml
 i2c:
   id: bus_a
   sda: GPIO21

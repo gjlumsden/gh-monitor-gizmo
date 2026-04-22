@@ -33,10 +33,26 @@ jobs:
             exit 1;
           }
 
+      - name: Sanity-check dist/
+        run: |
+          count=$(ls dist/*.yaml | wc -l)
+          if [ "$count" -ne 4 ]; then
+            echo "expected 4 YAML files in dist/, found $count"
+            ls -l dist/
+            exit 1
+          fi
+          for f in dist/*.yaml; do
+            size=$(stat -c%s "$f")
+            if [ "$size" -lt 50000 ]; then
+              echo "$f is suspiciously small: $size bytes"
+              exit 1
+            fi
+          done
+
       - name: Upload build artefacts
         uses: actions/upload-artifact@v4
         with:
-          name: ghmonitorgizmo-yaml
+          name: ghmonitorgizmo-firmware
           path: dist/*.yaml
           if-no-files-found: error
 
@@ -63,11 +79,20 @@ jobs:
           body: |
             ## Install
 
-            Download the YAML file for your hardware, paste it into Home
-            Assistant's ESPHome Builder add-on as a new device config, edit
-            the `substitutions:` block at the top (WiFi, IP, GitHub user),
-            and install.
+            Pick the YAML file matching **your hardware** *and* **your
+            install path**, then follow the matching guide below.
 
-            | Device | File |
-            |---|---|
-            | M5StickC Plus 1.1 | `ghmonitorgizmo-cplus.yaml` |
+            |                      | Home Assistant (native API)            | Standalone (built-in web UI)                  |
+            |----------------------|----------------------------------------|-----------------------------------------------|
+            | **M5StickC Plus 1.1**| `ghmonitorgizmo-cplus-ha.yaml`         | `ghmonitorgizmo-cplus-standalone.yaml`        |
+            | **M5Stick S3 (K150)**| `ghmonitorgizmo-s3-ha.yaml`            | `ghmonitorgizmo-s3-standalone.yaml`           |
+
+            Install guides:
+
+            - **Home Assistant** – see [docs/INSTALL-ha.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/docs/INSTALL-ha.md)
+            - **Standalone, browser flash** – see [docs/INSTALL-standalone-web.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/docs/INSTALL-standalone-web.md)
+            - **Standalone, ESPHome CLI** – see [docs/INSTALL-standalone-cli.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/docs/INSTALL-standalone-cli.md)
+
+            Need a secrets file? Start from
+            [secrets.yaml.example](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/secrets.yaml.example).
+

@@ -90,6 +90,7 @@ psram:
   speed: 80MHz
 
 # !include ../common/network.yaml
+# !include_variant api.yaml
 i2c:
   # Internal I2C bus shared by the M5PM1 PMIC (0x6e), BMI270 IMU (0x68)
   # and ES8311 audio codec (0x18). The Grove / Port.A bus is separate

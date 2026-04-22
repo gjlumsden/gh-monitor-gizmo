@@ -1,10 +1,6 @@
 logger:
   level: WARN
 
-api:
-  encryption:
-    key: !secret ghgizmo_api_encryption_key
-
 ota:
   - platform: esphome
     password: !secret ghgizmo_ota_password

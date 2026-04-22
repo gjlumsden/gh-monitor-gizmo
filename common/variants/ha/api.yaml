@@ -1,0 +1,7 @@
+# Home Assistant variant: native ESPHome API.
+# After flash, the device is auto-discovered by HA and exposed as a
+# device with Battery Level / (S3: Charging, USB Voltage) entities.
+# Docs: https://esphome.io/components/api
+api:
+  encryption:
+    key: !secret ghgizmo_api_encryption_key

@@ -1,0 +1,16 @@
+# Standalone variant: no Home Assistant integration.
+# Replaces the native ESPHome API with a browser-accessible web UI on
+# port 80 and a captive-portal fallback for first-boot Wi-Fi setup.
+#
+# Docs:
+#   https://esphome.io/components/web_server
+#   https://esphome.io/components/captive_portal
+#
+# The web UI is open on your LAN by default. To restrict access, add
+# an `auth:` block with `username:` / `password:` under `web_server:`;
+# see the ESPHome docs linked above.
+web_server:
+  port: 80
+  version: 3
+
+captive_portal:
