@@ -25,10 +25,19 @@ substitutions:
   # backlight is switched via AXP192 LDO2 and cannot be dimmed, so this
   # value is ignored.
   backlight_brightness: "1.0"
-  # Minutes of total inactivity (no new events, no button press) after
-  # which the screen is blanked regardless of night-mode window. Set to
-  # "0" to disable. Reserved for a future release; currently unused.
-  idle_screen_off_minutes: "0"
+
+  # --- Idle-UI auto-sleep ---
+  # The idle carousel rotates through info cards with DVD-bouncer
+  # intervals between them. After idle_screen_off_cycles complete
+  # rotations of every available card the backlight is turned off,
+  # the bouncer animation is paused and all background polling except
+  # the events fetch stops, to reduce burn-in and save battery. Set
+  # idle_screen_off_cycles to "0" to keep the old always-on behaviour.
+  # Button A wakes the UI for another idle_screen_off_cycles cycles.
+  # A new event also wakes the screen via the existing events window.
+  idle_card_seconds: "10"
+  idle_bouncer_seconds: "10"
+  idle_screen_off_cycles: "1"
 
   # --- Networking (static IP) ---
   # To use DHCP instead, delete the `manual_ip:` block in `wifi:` below;
@@ -98,6 +107,15 @@ binary_sensor:
             id(carousel_frames) = 0;
             // Wake the screen for ~15 s if we're in night mode
             id(wake_frames) = 60;
+            // Wake the idle UI and seed a fresh set of carousel
+            // cycles so the user sees the full rotation again
+            // before it goes back to sleep.
+            id(idle_ui_active) = true;
+            id(carousel_cycle_anchor) = 0;
+            const int max_cycles = ${idle_screen_off_cycles};
+            id(carousel_cycles_left) = max_cycles > 0 ? max_cycles : 1;
+            id(screensaver_frames) = 0;
+            id(screensaver_cooldown) = 4 * ${idle_bouncer_seconds};
         - script.execute: apply_screen_power
 
 # --- FONTS ---
@@ -123,7 +141,12 @@ script:
             else             sleep = (h >= s || h < e);
           }
           id(screen_asleep) = sleep;
-          bool want_on = !sleep || id(wake_frames) > 0 || id(idle_frames) > 0;
+          // Backlight on when we're outside the night window AND the
+          // idle UI is active, OR whenever a button press or an event
+          // has requested a temporary wake.
+          bool want_on = (!sleep && id(idle_ui_active))
+                         || id(wake_frames) > 0
+                         || id(idle_frames) > 0;
 
           // Toggle AXP192 LDO2 (backlight) via I2C: reg 0x12 bit 2
           uint8_t reg = 0x12;

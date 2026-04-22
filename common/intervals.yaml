@@ -15,6 +15,10 @@ interval:
               id(carousel_detail).clear();
               id(carousel_idx) = 0;
               id(carousel_frames) = 0;
+              // Events window expired. If the idle UI is asleep we
+              // need to turn the backlight back off; flag it for the
+              // dirty-check below.
+              if (!id(idle_ui_active)) id(pending_screen_update) = true;
             }
           }
 
@@ -30,8 +34,8 @@ interval:
             }
           }
 
-          // DVD-bouncer: advance only while idle
-          if (id(idle_frames) == 0) {
+          // DVD-bouncer: advance only while idle AND the idle UI is active
+          if (id(idle_frames) == 0 && id(idle_ui_active)) {
             const int W = 240, H = 135;
             const int GW = 52, GH = 64;
             const int TOP = 22;
@@ -48,25 +52,34 @@ interval:
           }
 
           // Idle flash cycle.
-          //   events mode   -> preempts everything; reset flash state
-          //   showing card  -> screensaver_frames ticks down; at 0 -> bouncer
-          //   bouncer       -> screensaver_cooldown ticks down; at 0 -> pick
-          //                    the next available card and show it for 10s
-          //
-          // End-to-end: 50s bouncer, 10s card, 50s bouncer, next card, ...
+          //   events mode        -> preempts everything; reset flash state
+          //   idle UI asleep     -> do nothing (backlight is off)
+          //   showing card       -> screensaver_frames ticks down; at 0
+          //                         -> bouncer
+          //   bouncer            -> screensaver_cooldown ticks down; at 0
+          //                         -> pick next card; if that closes a
+          //                         full rotation, decrement
+          //                         carousel_cycles_left and sleep the
+          //                         UI when it hits zero.
+          const int card_ticks    = 4 * ${idle_card_seconds};
+          const int bouncer_ticks = 4 * ${idle_bouncer_seconds};
           if (id(idle_frames) > 0) {
             // Events are showing; reset flash state so we resume from
             // the bouncer once events clear. Leave idle_screen alone so
             // the rotation advances past the last-shown card next time.
             id(screensaver_frames) = 0;
-            id(screensaver_cooldown) = 200;   // ~50s bouncer before first card
+            id(screensaver_cooldown) = bouncer_ticks;
+          } else if (!id(idle_ui_active)) {
+            // UI asleep - freeze the rotation counters
+            id(screensaver_frames) = 0;
+            id(screensaver_cooldown) = bouncer_ticks;
           } else if (id(screensaver_frames) > 0) {
             id(screensaver_frames) = id(screensaver_frames) - 1;
             if (id(screensaver_frames) == 0) {
-              // Card window ended - back to bouncer for ~50s. Keep
-              // idle_screen as the last-shown card so the next pick
-              // advances in the rotation.
-              id(screensaver_cooldown) = 200;
+              // Card window ended - back to bouncer. Keep idle_screen
+              // as the last-shown card so the next pick advances in
+              // the rotation.
+              id(screensaver_cooldown) = bouncer_ticks;
             }
           } else {
             // Bouncer active; count down to next card flash
@@ -95,8 +108,28 @@ interval:
                   if (screens[i] == cur) { next = screens[(i + 1) % n]; break; }
                 }
                 id(idle_screen) = next;
-                id(screensaver_frames) = 40;    // ~10s card flash
+                id(screensaver_frames) = card_ticks;
                 id(pending_card_beep) = true;
+
+                // Cycle bookkeeping: anchor the first card of a fresh
+                // cycle, then detect when we wrap back to it. Only
+                // active when idle_screen_off_cycles > 0.
+                const int max_cycles = ${idle_screen_off_cycles};
+                if (max_cycles > 0) {
+                  if (id(carousel_cycle_anchor) == 0) {
+                    id(carousel_cycle_anchor) = next;
+                  } else if (next == id(carousel_cycle_anchor)) {
+                    // Full rotation complete
+                    id(carousel_cycles_left) = id(carousel_cycles_left) - 1;
+                    if (id(carousel_cycles_left) <= 0) {
+                      id(idle_ui_active) = false;
+                      id(carousel_cycle_anchor) = 0;
+                      id(screensaver_frames) = 0;
+                      id(pending_card_beep) = false;
+                      id(pending_screen_update) = true;
+                    }
+                  }
+                }
               }
             }
           }
@@ -110,6 +143,12 @@ interval:
             - script.execute: play_beep_card
           else:
             - lambda: 'id(pending_card_beep) = false;'
+      - if:
+          condition:
+            lambda: 'return id(pending_screen_update);'
+          then:
+            - lambda: 'id(pending_screen_update) = false;'
+            - script.execute: apply_screen_power
 
   - interval: 60s
     startup_delay: 30s
@@ -129,6 +168,7 @@ interval:
             and:
               - wifi.connected:
               - lambda: 'return !id(copilot_disabled);'
+              - lambda: 'return id(idle_ui_active);'
           then:
             - lambda: 'id(copilot_retry_pending) = false;'
             - script.execute: fetch_copilot_usage
@@ -141,6 +181,7 @@ interval:
             and:
               - wifi.connected:
               - lambda: 'return !id(stats_disabled);'
+              - lambda: 'return id(idle_ui_active);'
           then:
             - lambda: 'id(stats_retry_pending) = false;'
             - script.execute: fetch_stats_graphql
@@ -150,7 +191,9 @@ interval:
     then:
       - if:
           condition:
-            wifi.connected:
+            and:
+              - wifi.connected:
+              - lambda: 'return id(idle_ui_active);'
           then:
             - lambda: 'id(cal_retry_pending) = false;'
             - script.execute: fetch_cal_graphql
@@ -160,7 +203,9 @@ interval:
     then:
       - if:
           condition:
-            wifi.connected:
+            and:
+              - wifi.connected:
+              - lambda: 'return id(idle_ui_active);'
           then:
             - lambda: 'id(ratelimit_retry_pending) = false;'
             - script.execute: fetch_rate_limit
@@ -173,6 +218,7 @@ interval:
             and:
               - wifi.connected:
               - lambda: 'return !id(dependabot_disabled);'
+              - lambda: 'return id(idle_ui_active);'
           then:
             - lambda: 'id(dependabot_retry_pending) = false;'
             - script.execute: fetch_dependabot_graphql

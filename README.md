@@ -277,6 +277,15 @@ See [`secrets.yaml.example`](secrets.yaml.example) for the template.
   night-mode hours. On the S3 the default is `0.6` and lowering it
   further (e.g. `0.35`) is the single most effective way to prevent
   burn-in.
+- **Idle-UI auto-sleep** – after `idle_screen_off_cycles` complete
+  rotations of every available info card, the backlight is turned off,
+  the DVD-bouncer animation is paused, and all background polling
+  except the 60 s events fetch stops. A new event wakes the screen via
+  the usual events window; pressing Button A seeds another set of
+  cycles. Card and bouncer dwell times are tunable via
+  `idle_card_seconds` (default `10`) and `idle_bouncer_seconds`
+  (default `10`). Set `idle_screen_off_cycles: "0"` to disable and
+  keep the old always-on behaviour.
 
 ## Controls
 

@@ -27,10 +27,19 @@ substitutions:
   # panel and is the single most effective way to prevent burn-in on
   # these small ST7789 displays.
   backlight_brightness: "0.6"
-  # Minutes of total inactivity (no new events, no button press) after
-  # which the screen is blanked regardless of night-mode window. Set to
-  # "0" to disable. Reserved for a future release; currently unused.
-  idle_screen_off_minutes: "0"
+
+  # --- Idle-UI auto-sleep ---
+  # The idle carousel rotates through info cards with DVD-bouncer
+  # intervals between them. After idle_screen_off_cycles complete
+  # rotations of every available card the backlight is turned off,
+  # the bouncer animation is paused and all background polling except
+  # the events fetch stops, to reduce burn-in and save battery. Set
+  # idle_screen_off_cycles to "0" to keep the old always-on behaviour.
+  # Button A wakes the UI for another idle_screen_off_cycles cycles.
+  # A new event also wakes the screen via the existing events window.
+  idle_card_seconds: "10"
+  idle_bouncer_seconds: "10"
+  idle_screen_off_cycles: "1"
 
   # --- Networking (static IP) ---
   # To use DHCP instead, delete the `manual_ip:` block in `wifi:` below;
@@ -132,7 +141,29 @@ binary_sensor:
             id(carousel_frames) = 0;
             // Wake the screen for ~15 s if we're in night mode
             id(wake_frames) = 60;
+            // Wake the idle UI and seed a fresh set of carousel
+            // cycles so the user sees the full rotation again
+            // before it goes back to sleep.
+            id(idle_ui_active) = true;
+            id(carousel_cycle_anchor) = 0;
+            const int max_cycles = ${idle_screen_off_cycles};
+            id(carousel_cycles_left) = max_cycles > 0 ? max_cycles : 1;
+            id(screensaver_frames) = 0;
+            id(screensaver_cooldown) = 4 * ${idle_bouncer_seconds};
         - script.execute: apply_screen_power
+
+  # Charging status from the M5PM1 PMIC: register 0x12 bit 0 is
+  # 0 = charging, 1 = not charging (same probe used by M5Unified).
+  - platform: template
+    name: "Charging"
+    id: charging
+    device_class: battery_charging
+    lambda: |-
+      uint8_t reg = 0x12;
+      if (id(bus_a)->write(0x6e, &reg, 1, false) != i2c::ERROR_OK) return {};
+      uint8_t v;
+      if (id(bus_a)->read(0x6e, &v, 1) != i2c::ERROR_OK) return {};
+      return (v & 0x01) == 0;
 
 # --- FONTS ---
 # !include ../common/fonts.yaml
@@ -159,7 +190,10 @@ script:
           id(screen_asleep) = sleep;
       - if:
           condition:
-            lambda: 'return !id(screen_asleep) || id(wake_frames) > 0 || id(idle_frames) > 0;'
+            lambda: |-
+              return (!id(screen_asleep) && id(idle_ui_active))
+                     || id(wake_frames) > 0
+                     || id(idle_frames) > 0;
           then:
             - light.turn_on:
                 id: backlight_light
@@ -205,11 +239,13 @@ display:
     update_interval: 250ms
     lambda: |-
 # !include ../common/display_lambda.yaml
-# Stub battery sensor. Battery voltage readback on the StickS3 goes
-# through an M5PM1 PMIC register whose address is not yet documented in
-# public sources, so this sensor just publishes NaN - the shared
-# display lambda references `id(battery_level)` and expects it to
-# exist. Wiring a real reading is a future release.
+# Battery % is derived from the M5PM1 PMIC's on-chip ADC (register
+# pair 0x22/0x23 at I2C address 0x6E, little-endian millivolts). The
+# level curve (3300 mV = 0 %, 4100 mV = 100 %) matches the formula in
+# m5stack/M5Unified Power_Class.cpp. The charging binary sensor reads
+# bit 0 of the PMIC status register 0x12 (0 = charging). The VBUS
+# voltage sensor reads the 0x24/0x25 register pair (same format as
+# battery) so a USB supply is visible in Home Assistant.
 sensor:
   - platform: template
     name: "Battery Level"
@@ -217,4 +253,28 @@ sensor:
     unit_of_measurement: "%"
     accuracy_decimals: 0
     update_interval: 60s
-    lambda: "return NAN;"
+    lambda: |-
+      uint8_t reg = 0x22;
+      if (id(bus_a)->write(0x6e, &reg, 1, false) != i2c::ERROR_OK) return NAN;
+      uint8_t buf[2];
+      if (id(bus_a)->read(0x6e, buf, 2) != i2c::ERROR_OK) return NAN;
+      int mv = (buf[1] << 8) | buf[0];
+      if (mv <= 0) return NAN;
+      int level = (mv - 3300) * 100 / 800;
+      if (level < 0) level = 0;
+      if (level > 100) level = 100;
+      return (float) level;
+
+  - platform: template
+    name: "USB Voltage"
+    id: vbus_voltage
+    unit_of_measurement: "V"
+    accuracy_decimals: 2
+    update_interval: 60s
+    lambda: |-
+      uint8_t reg = 0x24;
+      if (id(bus_a)->write(0x6e, &reg, 1, false) != i2c::ERROR_OK) return NAN;
+      uint8_t buf[2];
+      if (id(bus_a)->read(0x6e, buf, 2) != i2c::ERROR_OK) return NAN;
+      int mv = (buf[1] << 8) | buf[0];
+      return mv / 1000.0f;

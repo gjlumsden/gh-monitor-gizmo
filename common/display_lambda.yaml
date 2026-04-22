@@ -3,9 +3,14 @@
 
       it.fill(Color(0, 0, 0));
 
-      // Night mode: render a blank screen (backlight is off anyway,
-      // but this saves redraw cost and avoids a flash on wake).
-      if (id(screen_asleep) && id(wake_frames) == 0 && id(idle_frames) == 0) return;
+      // Backlight off: render a blank screen (saves redraw cost and
+      // avoids a flash on wake). The backlight is off whenever we are
+      // in the night-mode window OR the idle UI has auto-slept after
+      // completing its configured number of carousel cycles. A button
+      // press (wake_frames>0) or an incoming event (idle_frames>0)
+      // keeps drawing so the user sees what woke it.
+      if ((id(screen_asleep) || !id(idle_ui_active)) &&
+          id(wake_frames) == 0 && id(idle_frames) == 0) return;
 
       // header bar
       it.filled_rectangle(0, 0, W, 22, Color(20, 20, 40));

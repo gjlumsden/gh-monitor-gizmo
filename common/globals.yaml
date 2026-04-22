@@ -295,6 +295,36 @@ globals:
     restore_value: no
     initial_value: '0'
 
+  # Idle-UI auto-sleep. When idle_ui_active is false we blank the
+  # backlight, pause the DVD bouncer and info-card rotation, and skip
+  # every non-event background fetch. The events poll keeps running so
+  # that a new event can still wake the screen. Button A reactivates
+  # the UI and reseeds carousel_cycles_left from the
+  # idle_screen_off_cycles substitution; once the rotation has shown
+  # every available card that many times the UI goes back to sleep.
+  # carousel_cycle_anchor stores the first card of the current cycle
+  # so we can detect a completed rotation. pending_screen_update is a
+  # dirty flag set by the 250 ms tick lambda when it flips any state
+  # that affects backlight power; an `if:` step in the same interval
+  # consumes it and runs apply_screen_power so the change takes effect
+  # within one tick rather than waiting for the 30 s sync.
+  - id: idle_ui_active
+    type: bool
+    restore_value: no
+    initial_value: 'true'
+  - id: carousel_cycles_left
+    type: int
+    restore_value: no
+    initial_value: '${idle_screen_off_cycles}'
+  - id: carousel_cycle_anchor
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: pending_screen_update
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+
   # DVD-bouncer github logo state
   - id: gh_x
     type: int
