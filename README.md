@@ -91,17 +91,41 @@ Choose one:
   buttons)
 - USB-C cable for the initial flash and power
 
-> **Display image-retention warning.** Both boards use a small ST7789
-> IPS LCD. Running either device 24/7 on a static card at full
-> brightness can develop permanent image retention over weeks. The
-> **M5StickC Plus 1.1 is at noticeably higher risk** because its
-> backlight is switched by the AXP192 LDO2 rail and **cannot be
-> dimmed** – it's either full-on or off. The S3's backlight is PWM
-> (default 60%, lower with `backlight_brightness`). The firmware
-> already ships with night-mode hours and the idle-UI auto-sleep
-> enabled by default; leave them on, and prefer a short
-> `idle_screen_off_cycles` on the Plus 1.1. See
-> [Screen protection](#configuration-notes) below for tuning details.
+> **⚠ Display longevity warning — Plus 1.1 owners read this.**
+>
+> Both boards use a small ST7789 IPS LCD, but their backlights behave
+> very differently:
+>
+> - **M5StickC Plus 1.1** – the backlight LED string is driven by
+>   the [AXP192 PMIC][axp192-doc]'s LDO2 rail at a **fixed voltage with
+>   no PWM**. While the display is on, the LEDs run at 100% drive
+>   current, constantly. In 24/7 use this *will* shorten the
+>   backlight's life: at least one user of this firmware has already
+>   had the backlight die outright (screen content still rendered, but
+>   no illumination). In addition, the 120 mAh Li-ion cell is
+>   continuously trickle-charged while USB is plugged, which over
+>   months is known to cause cell swelling and can physically stress
+>   the display.
+> - **M5Stick S3 (K150)** – the backlight is PWM-dimmable on GPIO38
+>   (default `backlight_brightness: "0.6"`), which reduces effective
+>   LED current and heat. It also ships with a larger 250 mAh cell.
+>
+> **You cannot firmware-dim the Plus 1.1's backlight.** The only
+> defences that exist are time-based. The firmware already ships
+> them on by default – leave them on:
+>
+> - Night-mode hours (`sleep_start_hour` / `sleep_end_hour`, default
+>   20:00 → 08:00) blank the screen overnight.
+> - Idle-UI auto-sleep (`idle_screen_off_cycles`, default `1`) turns
+>   the backlight off after one carousel rotation when there's nothing
+>   new to show.
+>
+> For Plus 1.1 24/7 deployments specifically, consider widening the
+> night-mode window (e.g. `20` → `9`) and leaving
+> `idle_screen_off_cycles: "1"`. See
+> [Screen protection](#configuration-notes) below for the full
+> tuning guide. Treat the Plus 1.1 display as a consumable with a
+> finite lifetime; the S3 is the better long-term choice.
 
 ## Prerequisites
 
@@ -282,15 +306,26 @@ See [`secrets.yaml.example`](secrets.yaml.example) for the template.
   add `bluetooth_proxy:` – the ESP-IDF HTTP client needs a contiguous
   allocation that a running BLE stack tends to fragment out of
   existence.
-- **Screen protection** – small ST7789 panels can develop permanent
-  image retention after weeks of 24/7 use at full brightness. Both
-  firmwares expose a `backlight_brightness` substitution (0.0–1.0);
-  only the S3 honours it (real PWM on GPIO38). The Plus 1.1 backlight
-  is switched by the AXP192 LDO2 rail and cannot be dimmed, so on that
-  device `backlight_brightness` is ignored and the primary defence is
-  night-mode hours. On the S3 the default is `0.6` and lowering it
-  further (e.g. `0.35`) is the single most effective way to prevent
-  burn-in.
+- **Screen protection** – small ST7789 panels have two distinct
+  failure modes in 24/7 use:
+  1. **Backlight LED burnout** – tiny edge-lit LEDs driven at full
+     current continuously (notably on the Plus 1.1, where the AXP192
+     LDO2 rail has no PWM) eventually short or open and the display
+     goes dark while the rest of the board still works. This has
+     happened in the field on this firmware.
+  2. **Image retention** – localised colour shift where static
+     elements (e.g. the header bar) sit for weeks.
+  Both firmwares expose a `backlight_brightness` substitution
+  (0.0–1.0); **only the S3 honours it** (real PWM on GPIO38). The
+  Plus 1.1 backlight is switched on/off by the AXP192 LDO2 rail and
+  cannot be dimmed, so on that device `backlight_brightness` is
+  ignored and the only defences are time-based: night-mode hours
+  (`sleep_start_hour` / `sleep_end_hour`) plus the idle-UI
+  auto-sleep (`idle_screen_off_cycles`, default `1`). For a 24/7
+  deployment on the Plus 1.1 consider widening the night-mode
+  window (e.g. `20` → `9`). On the S3 the default brightness is
+  `0.6` and lowering it further (e.g. `0.35`) is the single most
+  effective way to extend backlight life.
 - **Idle-UI auto-sleep** – after `idle_screen_off_cycles` complete
   rotations of every available info card, the backlight is turned off,
   the DVD-bouncer animation is paused, and all background polling
@@ -431,6 +466,7 @@ schema validation, autocomplete, and inline docs for every component.
 [espweb-flash]: https://web.esphome.io/
 [espcli-guide]: https://esphome.io/guides/getting_started_command_line
 [ftdi-vcp]: https://ftdichip.com/drivers/vcp-drivers/
+[axp192-doc]: https://docs.m5stack.com/en/arduino/m5stickc_plus/power
 [ha-addon]: https://my.home-assistant.io/redirect/supervisor_addon/?addon=5c53de3b_esphome
 [ha-esphome]: https://www.home-assistant.io/integrations/esphome/
 [ha-fileeditor]: https://my.home-assistant.io/redirect/supervisor_addon/?addon=core_configurator
