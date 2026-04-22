@@ -23,8 +23,7 @@ telemetry (Home Assistant variant).
 
 ## ⚠ Display longevity and battery warning — READ BEFORE USE
 
-> [!WARNING]
-> **This applies to every owner of every supported device.** Do not
+> **⚠ This applies to every owner of every supported device.** Do not
 > skim past it. Hardware failures in the field have already happened
 > on this firmware.
 
