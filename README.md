@@ -24,8 +24,7 @@ telemetry (Home Assistant variant).
 ## ⚠ Display longevity and battery warning — READ BEFORE USE
 
 > **⚠ This applies to every owner of every supported device.** Do not
-> skim past it. Hardware failures in the field have already happened
-> on this firmware.
+> skim past it.
 
 ### Backlight burnout (Plus 1.1 at highest risk)
 
@@ -36,9 +35,9 @@ very differently:
   the [AXP192 PMIC][axp192-doc]'s LDO2 rail at a **fixed voltage
   with no PWM**. While the display is on, the LEDs run at 100%
   drive current, constantly. In 24/7 use this *will* shorten the
-  backlight's life: at least one user of this firmware has already
-  had the backlight die outright (display content still rendered,
-  but no illumination). In addition, the 120 mAh Li-ion cell is
+  backlight's life, and the backlight can eventually fail outright
+  (display content still rendered, but no illumination). In
+  addition, the 120 mAh Li-ion cell is
   continuously trickle-charged while USB is plugged, which over
   months is known to cause cell swelling and can physically stress
   the display.
@@ -340,9 +339,8 @@ See [`secrets.yaml.example`](secrets.yaml.example) for the template.
   failure modes in 24/7 use:
   1. **Backlight LED burnout** – tiny edge-lit LEDs driven at full
      current continuously (notably on the Plus 1.1, where the AXP192
-     LDO2 rail has no PWM) eventually short or open and the display
-     goes dark while the rest of the board still works. This has
-     happened in the field on this firmware.
+     LDO2 rail has no PWM) can eventually short or open and the
+     display goes dark while the rest of the board still works.
   2. **Image retention** – localised colour shift where static
      elements (e.g. the header bar) sit for weeks.
   Both firmwares expose a `backlight_brightness` substitution
