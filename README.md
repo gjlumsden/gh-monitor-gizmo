@@ -136,7 +136,34 @@ and follow the install guide for your variant:
   the classic [`esphome run`][espcli-guide] flow.
 
 All three paths share the same `secrets.yaml` format; see
-[`secrets.yaml.example`](secrets.yaml.example).## Creating a GitHub token
+[`secrets.yaml.example`](secrets.yaml.example).
+
+### USB drivers (first flash only)
+
+Both M5Stick devices present as USB serial over a **CH9102F** bridge,
+which is **not** in the stock Windows or macOS driver set. Install
+the driver *before* plugging the stick in the first time, otherwise
+the serial port simply won't appear in ESPHome Builder,
+`esphome run`, or [web.esphome.io][espweb-flash].
+
+| Platform       | Driver                                                                                                 |
+|----------------|--------------------------------------------------------------------------------------------------------|
+| Windows 10/11  | M5Stack bundle, includes CH9102: <https://docs.m5stack.com/en/arduino/arduino_ide>                      |
+| macOS          | WCH signed driver: <https://www.wch-ic.com/downloads/CH341SER_MAC_ZIP.html>                            |
+| Linux          | No driver needed (mainline kernel includes `ch341`); add your user to `dialout` to access `/dev/ttyUSB*` |
+
+Device-specific quick-start pages (include the same driver links and
+photos of the USB-C port orientation):
+
+- [M5StickC Plus 1.1 quick-start](https://docs.m5stack.com/en/quick_start/m5stickc_plus/mpythons)
+- [M5Stick S3 (K150) quick-start](https://docs.m5stack.com/en/quick_start/stickc_s3/mpythons)
+
+After install, unplug and replug the stick; Windows should pop a new
+"USB-SERIAL CH9102" COM port in Device Manager. On macOS look for
+`/dev/tty.wchusbserial*`. OTA updates after the first flash don't
+need the driver.
+
+## Creating a GitHub token
 
 The device always polls `GET /users/{user}/events` for the events
 carousel. Optional extra cards each want their own fine-grained

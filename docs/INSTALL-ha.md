@@ -18,6 +18,11 @@ If you are not running Home Assistant, see
 - A 2.4 GHz Wi-Fi network
 - USB-C cable for the initial flash (subsequent updates run over
   Wi-Fi via [OTA][espota])
+- **CH9102F USB-serial driver** installed on the machine running the
+  ESPHome Builder add-on's browser tab – see
+  [USB drivers](../README.md#usb-drivers-first-flash-only) in the
+  main README. Without this the flash dialog will not see a serial
+  port.
 
 ## 1. First device bootstrap
 

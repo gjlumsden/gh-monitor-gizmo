@@ -17,6 +17,11 @@ For Home Assistant use [INSTALL-ha.md](INSTALL-ha.md).
 - A [GitHub personal access token](../README.md#creating-a-github-token)
 - A 2.4 GHz Wi-Fi network
 - USB-C cable for the first flash
+- **CH9102F USB-serial driver** (Windows / macOS only – Linux has it
+  in-kernel). Without it `esphome run` will fail to find the serial
+  port on first flash. See
+  [USB drivers](../README.md#usb-drivers-first-flash-only) in the
+  main README.
 
 ## 1. Clone and configure
 
