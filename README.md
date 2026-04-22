@@ -104,7 +104,7 @@ Choose one:
 
 ## Installation
 
-### Choose your variant
+### 1. Choose your variant and download the firmware
 
 The firmware ships in two flavours per hardware:
 
@@ -117,51 +117,68 @@ The firmware ships in two flavours per hardware:
   back to a [captive portal][espcp] for first-boot Wi-Fi. Use this if
   you don't run HA or want to flash from a browser only.
 
+Download the matching YAML from the latest [GitHub Release][releases]:
+
 |                       | Home Assistant (native API)              | Standalone (built-in web UI)                    |
 |-----------------------|------------------------------------------|-------------------------------------------------|
 | **M5StickC Plus 1.1** | `ghmonitorgizmo-cplus-ha.yaml`           | `ghmonitorgizmo-cplus-standalone.yaml`          |
 | **M5Stick S3 (K150)** | `ghmonitorgizmo-s3-ha.yaml`              | `ghmonitorgizmo-s3-standalone.yaml`             |
 
-Download the matching YAML from the latest [GitHub Release][releases]
-and follow the install guide for your variant:
+### 2. Create a GitHub token
+
+See [Creating a GitHub token](#creating-a-github-token) below. Keep
+the value to hand – you'll paste it into `secrets.yaml` in the next
+step.
+
+### 3. Prepare `secrets.yaml`
+
+All three install paths read the same ESPHome `secrets.yaml`
+([ESPHome secrets docs][espsecrets]). Start from
+[`secrets.yaml.example`](secrets.yaml.example) and fill in Wi-Fi,
+GitHub user + token, and the ESPHome device secrets. If you only
+plan to flash the standalone variant you can omit
+`ghgizmo_api_encryption_key`. See the [secrets.yaml](#secretsyaml)
+section below for the full field list.
+
+### 4. Install the USB-serial driver (first flash only)
+
+The first flash goes over USB. After that, OTA updates run over
+Wi-Fi and no driver is required.
+
+| Device            | Bridge chip             | Driver                                                                                                 |
+|-------------------|-------------------------|--------------------------------------------------------------------------------------------------------|
+| M5StickC Plus 1.1 | FTDI (FT231X)           | **Windows / macOS:** [FTDI VCP driver][ftdi-vcp]. **Linux:** already in-kernel (`ftdi_sio`).            |
+| M5Stick S3 (K150) | *native USB (ESP32-S3)* | No driver required on any platform – the chip presents itself as a standard USB-CDC serial device.     |
+
+Device-specific vendor pages (useful if the port still doesn't
+enumerate – they cover download-mode button combos and download-rate
+caveats):
+
+- M5StickC Plus 1.1: <https://docs.m5stack.com/en/core/m5stickc_plus>
+  ([Arduino quick start](https://docs.m5stack.com/en/arduino/m5stickc_plus/program))
+- M5Stick S3 (K150): <https://docs.m5stack.com/en/core/StickS3>
+  ([Arduino quick start](https://docs.m5stack.com/en/arduino/m5sticks3/program))
+
+After install, unplug and replug the stick and confirm a new serial
+port appears: `COM<n>` in Windows Device Manager, or
+`/dev/tty.usbserial-*` / `/dev/tty.usbmodem*` on macOS/Linux.
+
+### 5. Flash – follow the guide for your install path
+
+With the firmware downloaded, the token ready, `secrets.yaml`
+populated, and the driver installed, pick the guide for your
+toolchain:
 
 - **Home Assistant** – [docs/INSTALL-ha.md](docs/INSTALL-ha.md) – use
-  the [ESPHome Builder add-on][ha-addon] to flash and OTA-update.
+  the [ESPHome Builder add-on][ha-addon] to flash over USB and then
+  OTA-update.
 - **Standalone (browser)** –
   [docs/INSTALL-standalone-web.md](docs/INSTALL-standalone-web.md) –
-  flash from Chrome/Edge with [web.esphome.io][espweb-flash]; no local
-  toolchain required beyond a one-off compile.
+  flash from Chrome/Edge with [web.esphome.io][espweb-flash]; no
+  local toolchain required beyond a one-off compile.
 - **Standalone (CLI)** –
   [docs/INSTALL-standalone-cli.md](docs/INSTALL-standalone-cli.md) –
   the classic [`esphome run`][espcli-guide] flow.
-
-All three paths share the same `secrets.yaml` format; see
-[`secrets.yaml.example`](secrets.yaml.example).
-
-### USB drivers (first flash only)
-
-Both M5Stick devices present as USB serial over a **CH9102F** bridge,
-which is **not** in the stock Windows or macOS driver set. Install
-the driver *before* plugging the stick in the first time, otherwise
-the serial port simply won't appear in ESPHome Builder,
-`esphome run`, or [web.esphome.io][espweb-flash].
-
-| Platform       | Driver                                                                                                 |
-|----------------|--------------------------------------------------------------------------------------------------------|
-| Windows 10/11  | M5Stack bundle, includes CH9102: <https://docs.m5stack.com/en/arduino/arduino_ide>                      |
-| macOS          | WCH signed driver: <https://www.wch-ic.com/downloads/CH341SER_MAC_ZIP.html>                            |
-| Linux          | No driver needed (mainline kernel includes `ch341`); add your user to `dialout` to access `/dev/ttyUSB*` |
-
-Device-specific quick-start pages (include the same driver links and
-photos of the USB-C port orientation):
-
-- [M5StickC Plus 1.1 quick-start](https://docs.m5stack.com/en/quick_start/m5stickc_plus/mpythons)
-- [M5Stick S3 (K150) quick-start](https://docs.m5stack.com/en/quick_start/stickc_s3/mpythons)
-
-After install, unplug and replug the stick; Windows should pop a new
-"USB-SERIAL CH9102" COM port in Device Manager. On macOS look for
-`/dev/tty.wchusbserial*`. OTA updates after the first flash don't
-need the driver.
 
 ## Creating a GitHub token
 
@@ -401,6 +418,7 @@ schema validation, autocomplete, and inline docs for every component.
 [espcp]: https://esphome.io/components/captive_portal
 [espweb-flash]: https://web.esphome.io/
 [espcli-guide]: https://esphome.io/guides/getting_started_command_line
+[ftdi-vcp]: https://ftdichip.com/drivers/vcp-drivers/
 [ha-addon]: https://my.home-assistant.io/redirect/supervisor_addon/?addon=5c53de3b_esphome
 [ha-esphome]: https://www.home-assistant.io/integrations/esphome/
 [ha-fileeditor]: https://my.home-assistant.io/redirect/supervisor_addon/?addon=core_configurator

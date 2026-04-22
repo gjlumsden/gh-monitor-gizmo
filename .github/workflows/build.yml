@@ -3,13 +3,12 @@ name: build
 on:
   push:
     branches: [main]
-    tags: ['v*']
   pull_request:
     branches: [main]
   workflow_dispatch:
 
 permissions:
-  contents: write  # needed to upload release assets
+  contents: read
 
 jobs:
   build:
@@ -55,44 +54,3 @@ jobs:
           name: ghmonitorgizmo-firmware
           path: dist/*.yaml
           if-no-files-found: error
-
-  release:
-    needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-
-      - name: Build single-file YAMLs
-        run: python build.py
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: dist/*.yaml
-          generate_release_notes: true
-          body: |
-            ## Install
-
-            Pick the YAML file matching **your hardware** *and* **your
-            install path**, then follow the matching guide below.
-
-            |                      | Home Assistant (native API)            | Standalone (built-in web UI)                  |
-            |----------------------|----------------------------------------|-----------------------------------------------|
-            | **M5StickC Plus 1.1**| `ghmonitorgizmo-cplus-ha.yaml`         | `ghmonitorgizmo-cplus-standalone.yaml`        |
-            | **M5Stick S3 (K150)**| `ghmonitorgizmo-s3-ha.yaml`            | `ghmonitorgizmo-s3-standalone.yaml`           |
-
-            Install guides:
-
-            - **Home Assistant** – see [docs/INSTALL-ha.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/docs/INSTALL-ha.md)
-            - **Standalone, browser flash** – see [docs/INSTALL-standalone-web.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/docs/INSTALL-standalone-web.md)
-            - **Standalone, ESPHome CLI** – see [docs/INSTALL-standalone-cli.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/docs/INSTALL-standalone-cli.md)
-
-            Need a secrets file? Start from
-            [secrets.yaml.example](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/secrets.yaml.example).
-

@@ -1,0 +1,132 @@
+name: release
+
+# Manual-only release pipeline.
+#
+# Trigger from the Actions tab -> release -> Run workflow. You must
+# supply:
+#   - tag     e.g. v1.2.0 (will be created and pushed if it doesn't exist)
+#   - ref     branch, tag, or SHA to build from (default: main)
+#   - draft   create the release as a draft for review before publishing
+#   - prerelease   mark the release as a pre-release
+#
+# The workflow rebuilds the four single-file YAMLs from source, runs
+# the same sanity checks as build.yml, then publishes a GitHub Release
+# with the built YAMLs attached and an install-guide body.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to create and release (e.g. v1.2.0)'
+        required: true
+        type: string
+      ref:
+        description: 'Branch, tag, or SHA to build from'
+        required: true
+        default: 'main'
+        type: string
+      draft:
+        description: 'Publish as draft'
+        required: false
+        default: true
+        type: boolean
+      prerelease:
+        description: 'Mark as pre-release'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write  # needed to create tag + upload release assets
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref }}
+          # Fetch full history so we can push a tag from any ref
+          fetch-depth: 0
+
+      - name: Validate tag format
+        run: |
+          if [[ ! "${{ inputs.tag }}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]]; then
+            echo "tag '${{ inputs.tag }}' does not look like vMAJOR.MINOR.PATCH[-suffix]"
+            exit 1
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Build single-file YAMLs
+        run: python build.py
+
+      - name: Verify build is idempotent
+        run: |
+          python build.py
+          git diff --exit-code -- dist/ || {
+            echo 'build.py is not idempotent - dist/ differs between runs';
+            exit 1;
+          }
+
+      - name: Sanity-check dist/
+        run: |
+          count=$(ls dist/*.yaml | wc -l)
+          if [ "$count" -ne 4 ]; then
+            echo "expected 4 YAML files in dist/, found $count"
+            ls -l dist/
+            exit 1
+          fi
+          for f in dist/*.yaml; do
+            size=$(stat -c%s "$f")
+            if [ "$size" -lt 50000 ]; then
+              echo "$f is suspiciously small: $size bytes"
+              exit 1
+            fi
+          done
+
+      - name: Create and push tag (if it doesn't already exist)
+        env:
+          GH_TAG: ${{ inputs.tag }}
+        run: |
+          git config user.name  'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          if git rev-parse "refs/tags/${GH_TAG}" >/dev/null 2>&1; then
+            echo "tag ${GH_TAG} already exists, reusing"
+          else
+            git tag -a "${GH_TAG}" -m "Release ${GH_TAG}"
+            git push origin "${GH_TAG}"
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag }}
+          name: ${{ inputs.tag }}
+          target_commitish: ${{ inputs.ref }}
+          draft: ${{ inputs.draft }}
+          prerelease: ${{ inputs.prerelease }}
+          files: dist/*.yaml
+          generate_release_notes: true
+          body: |
+            ## Install
+
+            Pick the YAML file matching **your hardware** *and* **your
+            install path**, then follow the matching guide below.
+
+            |                      | Home Assistant (native API)            | Standalone (built-in web UI)                  |
+            |----------------------|----------------------------------------|-----------------------------------------------|
+            | **M5StickC Plus 1.1**| `ghmonitorgizmo-cplus-ha.yaml`         | `ghmonitorgizmo-cplus-standalone.yaml`        |
+            | **M5Stick S3 (K150)**| `ghmonitorgizmo-s3-ha.yaml`            | `ghmonitorgizmo-s3-standalone.yaml`           |
+
+            Install guides:
+
+            - **Home Assistant** – see [docs/INSTALL-ha.md](https://github.com/${{ github.repository }}/blob/${{ inputs.tag }}/docs/INSTALL-ha.md)
+            - **Standalone, browser flash** – see [docs/INSTALL-standalone-web.md](https://github.com/${{ github.repository }}/blob/${{ inputs.tag }}/docs/INSTALL-standalone-web.md)
+            - **Standalone, ESPHome CLI** – see [docs/INSTALL-standalone-cli.md](https://github.com/${{ github.repository }}/blob/${{ inputs.tag }}/docs/INSTALL-standalone-cli.md)
+
+            Need a secrets file? Start from
+            [secrets.yaml.example](https://github.com/${{ github.repository }}/blob/${{ inputs.tag }}/secrets.yaml.example).

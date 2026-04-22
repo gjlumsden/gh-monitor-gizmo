@@ -19,12 +19,13 @@ If you use Home Assistant, use [INSTALL-ha.md](INSTALL-ha.md) instead.
 - A [GitHub personal access token](../README.md#creating-a-github-token)
 - A 2.4 GHz Wi-Fi network
 - USB-C cable
-- **CH9102F USB-serial driver** – both M5Stick boards use a WCH
-  CH9102F bridge that isn't in the stock Windows/macOS driver set.
-  Install it *before* plugging the device in, otherwise the
-  `web.esphome.io` **Connect** dialog will show no serial ports. See
-  [USB drivers](../README.md#usb-drivers-first-flash-only) in the
-  main README.
+- **USB-serial driver** – the M5StickC Plus 1.1 uses an FTDI FT231X
+  bridge and needs the FTDI VCP driver on Windows / macOS. The M5Stick
+  S3 uses native ESP32-S3 USB and needs no driver. Install the driver
+  *before* plugging the device in, otherwise the `web.esphome.io`
+  **Connect** dialog will show no serial ports. See
+  [USB-serial driver](../README.md#4-install-the-usb-serial-driver-first-flash-only)
+  in the main README.
 
 ## 1. Prepare a `secrets.yaml`
 
