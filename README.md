@@ -91,6 +91,18 @@ Choose one:
   buttons)
 - USB-C cable for the initial flash and power
 
+> **Display image-retention warning.** Both boards use a small ST7789
+> IPS LCD. Running either device 24/7 on a static card at full
+> brightness can develop permanent image retention over weeks. The
+> **M5StickC Plus 1.1 is at noticeably higher risk** because its
+> backlight is switched by the AXP192 LDO2 rail and **cannot be
+> dimmed** – it's either full-on or off. The S3's backlight is PWM
+> (default 60%, lower with `backlight_brightness`). The firmware
+> already ships with night-mode hours and the idle-UI auto-sleep
+> enabled by default; leave them on, and prefer a short
+> `idle_screen_off_cycles` on the Plus 1.1. See
+> [Screen protection](#configuration-notes) below for tuning details.
+
 ## Prerequisites
 
 - [ESPHome][esphome] 2026.4 or later – pick the toolchain that
