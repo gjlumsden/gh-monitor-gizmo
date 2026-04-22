@@ -11,15 +11,76 @@ An [ESPHome][esphome] firmware for the [M5StickC Plus 1.1][m5] and
 [M5Stick S3 (K150)][m5s3] that turns them into a desk-top GitHub
 activity monitor. It polls your user events feed, carousels through
 anything new, beeps on CI failures (Plus 1.1 only), bounces a Material
-Design GitHub logo around the screen when idle, and shows battery % on
-the Plus 1.1.
+Design GitHub logo around the screen when idle, and surfaces battery
+telemetry (Home Assistant variant).
 
 > The Plus 1.1 and S3 share a 135×240 ST7789 panel so the entire UI
-> layer is identical between them. The S3 build has no audio (it uses
-> an I2S codec rather than a passive buzzer; audio support is deferred)
-> and currently does not publish a battery-level sensor.
+> layer is identical between them. The S3 has no audio yet (it uses
+> an I2S codec rather than a passive buzzer; audio support is
+> deferred).
 
 ![gh-monitor-gizmo running on an M5StickC Plus 1.1](images/m5stick-cplus-1.1-gh-gizmo.png)
+
+> [!WARNING]
+> ## ⚠ Display longevity and battery warning — READ BEFORE USE
+>
+> **This applies to every owner of every supported device.** Do not
+> skim past it; hardware failures in the field have already happened
+> on this firmware.
+>
+> ### Backlight burnout (Plus 1.1 at highest risk)
+>
+> Both boards use a small ST7789 IPS LCD, but their backlights behave
+> very differently:
+>
+> - **M5StickC Plus 1.1** – the backlight LED string is driven by
+>   the [AXP192 PMIC][axp192-doc]'s LDO2 rail at a **fixed voltage
+>   with no PWM**. While the display is on, the LEDs run at 100%
+>   drive current, constantly. In 24/7 use this *will* shorten the
+>   backlight's life: at least one user of this firmware has already
+>   had the backlight die outright (display content still rendered,
+>   but no illumination). In addition, the 120 mAh Li-ion cell is
+>   continuously trickle-charged while USB is plugged, which over
+>   months is known to cause cell swelling and can physically stress
+>   the display.
+>
+>   This warning **likely also applies** to the original M5StickC and
+>   to the M5StickC Plus2 (both share the same AXP192-driven backlight
+>   topology), but this firmware has not been tested on either of
+>   those boards.
+>
+> - **M5Stick S3 (K150)** – the backlight is PWM-dimmable on GPIO38
+>   (default `backlight_brightness: "0.6"`), which reduces effective
+>   LED current and heat. Risk is materially lower but not zero: at
+>   100% brightness 24/7 the same degradation path exists.
+>
+> **You cannot firmware-dim the Plus 1.1's backlight.** The only
+> defences that exist are time-based, and the firmware already ships
+> them on by default – leave them on:
+>
+> - Night-mode hours (`sleep_start_hour` / `sleep_end_hour`, default
+>   20:00 → 08:00) blank the screen overnight.
+> - Idle-UI auto-sleep (`idle_screen_off_cycles`, default `1`) turns
+>   the backlight off after one carousel rotation when there's
+>   nothing new to show.
+>
+> For Plus 1.1 24/7 deployments specifically, consider widening the
+> night-mode window (e.g. `20` → `9`) and leaving
+> `idle_screen_off_cycles: "1"`. See
+> [Screen protection](#configuration-notes) below for the full
+> tuning guide. Treat the Plus 1.1 display as a consumable with a
+> finite lifetime; the S3 is the better long-term choice.
+>
+> ### Battery life / power expectations (all devices)
+>
+> This firmware is Wi-Fi-heavy (HTTPS polls every 60 s plus periodic
+> extra cards) and drives the display continuously. Neither the
+> Plus 1.1's 120 mAh cell nor the S3's 250 mAh cell will run it for
+> more than a few hours off-charger. **Treat both devices as
+> USB-powered appliances** and either leave them plugged into a USB
+> port permanently or recharge them very frequently. Continuous USB
+> power is also the simplest way to survive the 30 s boot delay
+> before the first fetch.
 
 ## Features
 
@@ -75,10 +136,12 @@ the Plus 1.1.
 - **Graceful degradation** – any card whose permission is missing is
   silently disabled the first time it gets a 401/403/404 and stays
   off until reboot; nothing is retried or log-spammed.
-- **Battery %** (Plus 1.1 only) – read from the on-board AXP192 PMIC
-  over I²C and exposed to Home Assistant as a sensor. On the S3 the
-  sensor exists but publishes `NaN` until a M5PM1 battery register is
-  wired up.
+- **Battery telemetry** – battery level (%) is read from the on-board
+  PMIC (AXP192 on the Plus 1.1, M5PM1 on the S3) and shown in the UI
+  header on both devices. The S3 additionally exposes a charging
+  binary sensor and a USB bus-voltage sensor. In the Home Assistant
+  variant all of these are published as entities; the standalone
+  variant keeps them local.
 
 ## Hardware
 
@@ -91,73 +154,9 @@ Choose one:
   buttons)
 - USB-C cable for the initial flash and power
 
-> **⚠ Display longevity warning — Plus 1.1 owners read this.**
->
-> Both boards use a small ST7789 IPS LCD, but their backlights behave
-> very differently:
->
-> - **M5StickC Plus 1.1** – the backlight LED string is driven by
->   the [AXP192 PMIC][axp192-doc]'s LDO2 rail at a **fixed voltage with
->   no PWM**. While the display is on, the LEDs run at 100% drive
->   current, constantly. In 24/7 use this *will* shorten the
->   backlight's life: at least one user of this firmware has already
->   had the backlight die outright (screen content still rendered, but
->   no illumination). In addition, the 120 mAh Li-ion cell is
->   continuously trickle-charged while USB is plugged, which over
->   months is known to cause cell swelling and can physically stress
->   the display.
->
->   This warning **likely also applies** to the original M5StickC and
->   to the M5StickC Plus2 (both share the same AXP192-driven backlight
->   topology), but this firmware has not been tested on either of
->   those boards.
->
-> - **M5Stick S3 (K150)** – the backlight is PWM-dimmable on GPIO38
->   (default `backlight_brightness: "0.6"`), which reduces effective
->   LED current and heat. It also ships with a larger 250 mAh cell.
->
-> **You cannot firmware-dim the Plus 1.1's backlight.** The only
-> defences that exist are time-based. The firmware already ships
-> them on by default – leave them on:
->
-> - Night-mode hours (`sleep_start_hour` / `sleep_end_hour`, default
->   20:00 → 08:00) blank the screen overnight.
-> - Idle-UI auto-sleep (`idle_screen_off_cycles`, default `1`) turns
->   the backlight off after one carousel rotation when there's nothing
->   new to show.
->
-> For Plus 1.1 24/7 deployments specifically, consider widening the
-> night-mode window (e.g. `20` → `9`) and leaving
-> `idle_screen_off_cycles: "1"`. See
-> [Screen protection](#configuration-notes) below for the full
-> tuning guide. Treat the Plus 1.1 display as a consumable with a
-> finite lifetime; the S3 is the better long-term choice.
->
-> **Battery life / power expectations.** This firmware is Wi-Fi-heavy
-> (HTTPS polls every 60 s plus periodic extra cards) and drives the
-> display continuously. Neither the Plus 1.1's 120 mAh cell nor the
-> S3's 250 mAh cell will run it for more than a few hours
-> off-charger. **Treat both devices as USB-powered appliances** and
-> either leave them plugged into a USB port permanently or recharge
-> them very frequently. Continuous USB power is also the simplest
-> way to survive the 30 s boot delay before the first fetch.
->
-> **You cannot firmware-dim the Plus 1.1's backlight.** The only
-> defences that exist are time-based. The firmware already ships
-> them on by default – leave them on:
->
-> - Night-mode hours (`sleep_start_hour` / `sleep_end_hour`, default
->   20:00 → 08:00) blank the screen overnight.
-> - Idle-UI auto-sleep (`idle_screen_off_cycles`, default `1`) turns
->   the backlight off after one carousel rotation when there's nothing
->   new to show.
->
-> For Plus 1.1 24/7 deployments specifically, consider widening the
-> night-mode window (e.g. `20` → `9`) and leaving
-> `idle_screen_off_cycles: "1"`. See
-> [Screen protection](#configuration-notes) below for the full
-> tuning guide. Treat the Plus 1.1 display as a consumable with a
-> finite lifetime; the S3 is the better long-term choice.
+Before flashing, make sure you've read the
+[Display longevity and battery warning](#-display-longevity-and-battery-warning--read-before-use)
+near the top of this README.
 
 ## Prerequisites
 
