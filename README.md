@@ -64,10 +64,9 @@ them on by default – leave them on:
 
 For Plus 1.1 24/7 deployments specifically, consider widening the
 night-mode window (e.g. `20` → `9`) and leaving
-`idle_screen_off_cycles: "1"`. See
-[Screen protection](#configuration-notes) below for the full
-tuning guide. Treat the Plus 1.1 display as a consumable with a
-finite lifetime; the S3 is the better long-term choice.
+`idle_screen_off_cycles: "1"`. Treat the Plus 1.1 display as a
+consumable with a finite lifetime; the S3 is the better long-term
+choice.
 
 ### Battery life / power expectations (all devices)
 
@@ -335,25 +334,6 @@ See [`secrets.yaml.example`](secrets.yaml.example) for the template.
   add `bluetooth_proxy:` – the ESP-IDF HTTP client needs a contiguous
   allocation that a running BLE stack tends to fragment out of
   existence.
-- **Screen protection** – small ST7789 panels have two distinct
-  failure modes in 24/7 use:
-  1. **Backlight LED burnout** – tiny edge-lit LEDs driven at full
-     current continuously (notably on the Plus 1.1, where the AXP192
-     LDO2 rail has no PWM) can eventually short or open and the
-     display goes dark while the rest of the board still works.
-  2. **Image retention** – localised colour shift where static
-     elements (e.g. the header bar) sit for weeks.
-  Both firmwares expose a `backlight_brightness` substitution
-  (0.0–1.0); **only the S3 honours it** (real PWM on GPIO38). The
-  Plus 1.1 backlight is switched on/off by the AXP192 LDO2 rail and
-  cannot be dimmed, so on that device `backlight_brightness` is
-  ignored and the only defences are time-based: night-mode hours
-  (`sleep_start_hour` / `sleep_end_hour`) plus the idle-UI
-  auto-sleep (`idle_screen_off_cycles`, default `1`). For a 24/7
-  deployment on the Plus 1.1 consider widening the night-mode
-  window (e.g. `20` → `9`). On the S3 the default brightness is
-  `0.6` and lowering it further (e.g. `0.35`) is the single most
-  effective way to extend backlight life.
 - **Idle-UI auto-sleep** – after `idle_screen_off_cycles` complete
   rotations of every available info card, the backlight is turned off,
   the DVD-bouncer animation is paused, and all background polling
