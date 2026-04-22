@@ -15,10 +15,18 @@ interval:
               id(carousel_detail).clear();
               id(carousel_idx) = 0;
               id(carousel_frames) = 0;
-              // Events window expired. If the idle UI is asleep we
-              // need to turn the backlight back off; flag it for the
-              // dirty-check below.
-              if (!id(idle_ui_active)) id(pending_screen_update) = true;
+              // Events window expired. Re-enter the idle UI for a
+              // fresh set of carousel cycles so the user sees the
+              // standard card rotation before the screen sleeps
+              // again, rather than dropping straight to a black
+              // panel.
+              id(idle_ui_active) = true;
+              id(carousel_cycle_anchor) = 0;
+              const int max_cycles = ${idle_screen_off_cycles};
+              id(carousel_cycles_left) = max_cycles > 0 ? max_cycles : 1;
+              id(screensaver_frames) = 0;
+              id(screensaver_cooldown) = 4 * ${idle_bouncer_seconds};
+              id(pending_screen_update) = true;
             }
           }
 
