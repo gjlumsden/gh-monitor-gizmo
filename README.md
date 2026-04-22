@@ -25,8 +25,7 @@ telemetry (Home Assistant variant).
 > ## ⚠ Display longevity and battery warning — READ BEFORE USE
 >
 > **This applies to every owner of every supported device.** Do not
-> skim past it; hardware failures in the field have already happened
-> on this firmware.
+> skim past it.
 >
 > ### Backlight burnout (Plus 1.1 at highest risk)
 >
@@ -485,6 +484,41 @@ schema validation, autocomplete, and inline docs for every component.
 ## Licence
 
 [MIT](LICENSE)
+
+## Disclaimer
+
+This firmware is provided **"as is", without warranty of any kind**,
+express or implied, including but not limited to the warranties of
+merchantability, fitness for a particular purpose, and
+non-infringement. In no event shall the author(s) or copyright
+holder(s) be liable for any claim, damages, or other liability —
+whether in an action of contract, tort, or otherwise — arising from,
+out of, or in connection with the firmware or the use of or other
+dealings in it.
+
+You run it on your own hardware at your own risk. That specifically
+includes, but is not limited to:
+
+- **Hardware damage** – flashing, running, or leaving this firmware
+  on a device may shorten the life of or permanently damage the
+  display, backlight, battery, PMIC, or other components. See the
+  [Display longevity and battery warning](#-display-longevity-and-battery-warning--read-before-use)
+  above. The author is not responsible for dead backlights, swollen
+  cells, bricked boards, or any other physical failure.
+- **Data and credentials** – you are responsible for the security
+  of any GitHub token, Wi-Fi credential, or other secret you put
+  into `secrets.yaml` or flash to the device, and for the scope you
+  grant that token.
+- **GitHub API usage** – you are responsible for staying within
+  GitHub's API rate limits and Terms of Service. This firmware polls
+  `api.github.com` under your account.
+- **Home Assistant integration** – no guarantee of compatibility
+  with any specific Home Assistant or ESPHome version beyond what's
+  stated in [Prerequisites](#prerequisites).
+
+This project is not affiliated with, endorsed by, or sponsored by
+GitHub, Inc., M5Stack, the ESPHome project, or the Home Assistant
+project.
 
 [m5]: https://docs.m5stack.com/en/core/m5stickc_plus
 [m5s3]: https://docs.m5stack.com/en/core/StickS3
