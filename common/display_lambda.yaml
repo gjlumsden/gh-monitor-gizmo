@@ -29,8 +29,10 @@
         it.print(72, 3, id(font_med), bc, batt);
       }
 
-      // CI tally: right-aligned in the header
-      {
+      // CI tally: right-aligned in the header. Compiled out on
+      // firmware variants where ci_enabled is "false" (the
+      // Plus 1.1).
+      if (${ci_enabled}) {
         const int slot_w = 32;
         int base_x = W - slot_w * 3 - 4;
         char nbuf[8];
@@ -193,7 +195,7 @@
           it.print(W - 4, H - 4, id(font_small), Color(255, 220, 120),
                    TextAlign::BASELINE_RIGHT, buf);
         }
-      } else if (id(screensaver_frames) > 0 && id(idle_screen) == 4) {
+      } else if (${ci_enabled} && id(screensaver_frames) > 0 && id(idle_screen) == 4) {
         // --- CI donut (from the most recent events page) ---
         int cx = W / 2;
         it.print(cx, 24, id(font_med), Color(180, 220, 255),

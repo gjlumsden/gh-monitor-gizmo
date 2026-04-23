@@ -233,7 +233,10 @@ globals:
     restore_value: no
     initial_value: '120'      # first card after ~30s idle
 
-  # CI tallies from the most recent page of events
+  # CI tallies. On the Plus 1.1 these are unused (ci_enabled=false).
+  # On the S3 they are refreshed by fetch_workflow_runs from the real
+  # /repos/:owner/:repo/actions/runs endpoint, aggregated across every
+  # active repo seen in a recent push/PR event.
   - id: ci_running
     type: int
     initial_value: '0'
@@ -242,6 +245,37 @@ globals:
     initial_value: '0'
   - id: ci_failed
     type: int
+    initial_value: '0'
+
+  # Active-repo tracker. Every Push or PullRequest event fed through
+  # fetch_user_events upserts into these two parallel vectors (name
+  # and last-seen unix timestamp). fetch_workflow_runs prunes entries
+  # older than active_repo_window_minutes, caps the list at
+  # active_repo_cap, and polls each remaining repo's actions/runs.
+  # Populated on both firmwares but only consumed on the S3.
+  - id: active_repo_names
+    type: std::vector<std::string>
+    restore_value: no
+  - id: active_repo_seen
+    type: std::vector<uint32_t>
+    restore_value: no
+  # Scratch accumulators for the per-repo workflow-run sweep; copied
+  # into ci_running/ci_success/ci_failed once the sweep completes.
+  - id: wf_tmp_running
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: wf_tmp_success
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: wf_tmp_failed
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: wf_cursor
+    type: int
+    restore_value: no
     initial_value: '0'
 
   # Carousel queue of new events since last fetch (oldest first)

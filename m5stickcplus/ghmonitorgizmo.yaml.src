@@ -18,6 +18,25 @@ substitutions:
   # screensaver info card (Copilot / Contributions / PRs / CI / Rate
   # Limit) appears. The new-event success/fail beeps are unaffected.
   card_beep_enabled: "true"
+  # Master switch for ALL chimes. Set to "false" to silence the
+  # device entirely (boot, event, card, ping, fail).
+  beeps_enabled: "true"
+
+  # --- CI (GitHub Actions) ---
+  # The M5StickC Plus 1.1 has very limited screen real estate, so the
+  # CI display is disabled on this firmware: no top-bar counter icons
+  # and no CI carousel card. Full CI tracking (with active-repo
+  # workflow-run polling) is available on the S3 firmware instead.
+  # Failure beeps on CI events still fire because they route through
+  # the shared event pipeline, not this toggle.
+  ci_enabled: "false"
+  # Authoritative source of ci_running/ci_success/ci_failed: either
+  # the per-page tally from the events endpoint ("false") or the
+  # dedicated /repos/:owner/:name/actions/runs sweep run by the S3
+  # firmware ("true"). The Plus 1.1 has no CI UI, but leaving the
+  # events tally on means the globals still reflect something
+  # sensible if you ever enable the UI in a fork.
+  workflow_runs_enabled: "false"
 
   # --- Screen protection ---
   # Fractional backlight brightness 0.0 - 1.0. Only honoured on the
@@ -51,6 +70,10 @@ substitutions:
 esphome:
   name: ghmonitorgizmo
   friendly_name: GH Monitor Gizmo
+  # Pin a floor on the ESPHome toolchain so a silent framework bump
+  # can't quietly reintroduce regressions. Raise deliberately when a
+  # known-good newer release is confirmed.
+  min_version: "2025.11.0"
 
 esp32:
   board: esp32dev
@@ -67,6 +90,11 @@ esp32:
       CONFIG_MBEDTLS_DYNAMIC_BUFFER: y
       CONFIG_MBEDTLS_DYNAMIC_FREE_CONFIG_DATA: y
       CONFIG_MBEDTLS_DYNAMIC_FREE_CA_CERT: y
+      # Disable the Bluetooth controller entirely. We don't use BLE
+      # and the BT controller task shares the radio with WiFi and
+      # consumes RAM — turning it off frees resources and removes
+      # one possible source of intermittent radio-stack crashes.
+      CONFIG_BT_ENABLED: n
 
 # !include ../common/network.yaml
 # !include_variant api.yaml
@@ -168,15 +196,27 @@ script:
   - id: play_beep_card
     mode: restart
     then:
-      - rtttl.play: "blip:d=32,o=6,b=300:c"
+      - if:
+          condition:
+            lambda: 'return ${beeps_enabled};'
+          then:
+            - rtttl.play: "blip:d=32,o=6,b=300:c"
   - id: play_beep_fail
     mode: restart
     then:
-      - rtttl.play: "fail:d=8,o=5,b=220:e,c,a4,p"
+      - if:
+          condition:
+            lambda: 'return ${beeps_enabled};'
+          then:
+            - rtttl.play: "fail:d=8,o=5,b=220:e,c,a4,p"
   - id: play_beep_ping
     mode: restart
     then:
-      - rtttl.play: "ping:d=16,o=6,b=300:e,g"
+      - if:
+          condition:
+            lambda: 'return ${beeps_enabled};'
+          then:
+            - rtttl.play: "ping:d=16,o=6,b=300:e,g"
 
 # !include ../common/scripts.yaml
 spi:

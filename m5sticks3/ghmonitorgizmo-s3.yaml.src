@@ -14,19 +14,36 @@ substitutions:
   timezone: "Europe/London"
 
   # --- Beeps ---
-  # The M5Stick S3 has no passive buzzer; it uses an ES8311 codec with
-  # an AW8737 amplifier driven over I2S. Audio support for that path is
-  # deferred, so on this firmware the three beep scripts below are
-  # intentional no-ops and this substitution has no effect. Kept for
-  # interface parity with the Plus 1.1 firmware.
+  # Short RTTTL tones played via the ES8311 codec + AW8737 amp on I2S0.
+  # `card_beep_enabled` gates the screensaver info-card beeps (it is
+  # checked by the shared intervals/scripts fragments); event and CI
+  # beeps are always enabled when they fire. The amp can get quite
+  # loud; M5Stack recommend keeping volume <= 0.75. 0.2 is a gentle
+  # level that is audible across a room without being startling.
   card_beep_enabled: "true"
+  speaker_volume: "0.15"
+  # Master switch for ALL chimes (boot, event, card, ping, fail).
+  # Set to "false" to silence the device entirely — useful for
+  # isolating audio-stack power draw as a crash trigger.
+  beeps_enabled: "false"
+
+  # --- CI (GitHub Actions) ---
+  # When true the top-bar CI counters (running/ok/fail) and the CI
+  # donut carousel card are shown, and a 60 s interval polls
+  # /repos/{owner}/{name}/actions/runs for every repo seen in a Push
+  # or PullRequest event during the last active_repo_window_minutes.
+  # Capped at active_repo_cap to keep rate-limit use predictable.
+  ci_enabled: "true"
+  workflow_runs_enabled: "true"
+  active_repo_window_minutes: "240"
+  active_repo_cap: "8"
 
   # --- Screen protection ---
   # Fractional backlight brightness 0.0 - 1.0. The S3 drives the LCD
   # backlight with a real PWM on GPIO38, so reducing this value dims the
   # panel and is the single most effective way to prevent burn-in on
   # these small ST7789 displays.
-  backlight_brightness: "0.6"
+  backlight_brightness: "0.4"
 
   # --- Idle-UI auto-sleep ---
   # The idle carousel rotates through info cards with DVD-bouncer
@@ -39,12 +56,12 @@ substitutions:
   # A new event also wakes the screen via the existing events window.
   idle_card_seconds: "10"
   idle_bouncer_seconds: "10"
-  idle_screen_off_cycles: "1"
+  idle_screen_off_cycles: "0"
 
   # --- Networking (static IP) ---
   # To use DHCP instead, delete the `manual_ip:` block in `wifi:` below;
   # these substitutions then become unused and can be removed.
-  static_ip: "192.168.4.11"
+  static_ip: "192.168.4.195"
   gateway:   "192.168.4.1"
   subnet:    "255.255.255.0"
   dns1:      "1.1.1.1"
@@ -53,17 +70,103 @@ substitutions:
 esphome:
   name: ghmonitorgizmo-s3
   friendly_name: GH Monitor Gizmo S3
+  # Pin a floor on the ESPHome toolchain so a silent framework bump
+  # (e.g. 2025.x -> 2026.x) can't quietly reintroduce the kind of
+  # idle-task regressions we spent a long session bisecting. Raise
+  # this deliberately when a known-good newer release is confirmed.
+  min_version: "2025.11.0"
+  # Best-effort clean-down on OTA / reboot. Dropping the LCD backlight
+  # and audio rail before the PMIC / I2S peripherals get torn down
+  # avoids a brief backlight flicker on reboot and a codec pop on
+  # whatever was last queued to the AW8737.
+  on_shutdown:
+    priority: 700
+    then:
+      - light.turn_off: backlight_light
+      - lambda: |-
+          // PM1 GPIO3 (audio rail) low: { reg 0x11, bit 3 = 0 }
+          uint8_t reg = 0x11;
+          if (id(bus_a)->write(0x6e, &reg, 1, false) == i2c::ERROR_OK) {
+            uint8_t v;
+            if (id(bus_a)->read(0x6e, &v, 1) == i2c::ERROR_OK) {
+              uint8_t buf[2] = { 0x11, (uint8_t)(v & ~(1 << 3)) };
+              id(bus_a)->write(0x6e, buf, 2);
+            }
+          }
   on_boot:
     # M5PM1 PMIC housekeeping. Register 0x09 is the PMIC watchdog /
     # config byte; on StickS3 it must be 0x00 for reliable I2C talk to
     # the PMIC. M5Unified's init does the same thing. A stale non-zero
     # value here (from a previous firmware) can make the PMIC stop
     # responding to reads, so we clear it on every boot.
+    #
+    # We also switch on the L3B power rail via PM1 GPIO2. The LCD on
+    # the K150 StickS3 is powered from L3B rather than 3V3 directly;
+    # without this the ST7789P3 panel has no backing voltage and the
+    # display stays completely dark (backlight off too). Mirrors
+    # M5GFX's board_M5StickS3 autodetect sequence.
     priority: 600
     then:
       - lambda: |-
-          uint8_t buf[2] = { 0x09, 0x00 };
-          id(bus_a)->write(0x6e, buf, 2);
+          // Clear PMIC watchdog/config
+          uint8_t wdg[2] = { 0x09, 0x00 };
+          id(bus_a)->write(0x6e, wdg, 2);
+
+          // Enable L3B rail (LCD power) on PM1 GPIO2.
+          //   reg 0x16 bit 2 = 0 -> GPIO function (not alt)
+          //   reg 0x10 bit 2 = 1 -> output mode
+          //   reg 0x13 bit 2 = 0 -> push-pull
+          //   reg 0x11 bit 2 = 1 -> drive HIGH
+          auto rmw = [](uint8_t reg, uint8_t mask, bool set) {
+            uint8_t r = reg;
+            if (id(bus_a)->write(0x6e, &r, 1, false) != i2c::ERROR_OK) return;
+            uint8_t v;
+            if (id(bus_a)->read(0x6e, &v, 1) != i2c::ERROR_OK) return;
+            uint8_t nv = set ? (v | mask) : (v & ~mask);
+            uint8_t buf[2] = { reg, nv };
+            id(bus_a)->write(0x6e, buf, 2);
+          };
+          rmw(0x16, 1 << 2, false); // GPIO function
+          rmw(0x10, 1 << 2, true);  // output
+          rmw(0x13, 1 << 2, false); // push-pull
+          rmw(0x11, 1 << 2, true);  // drive HIGH -> L3B on
+
+          // Audio enable on PM1 GPIO3: powers the ES8311 codec rail
+          // and drives the AW8737 amp PA-enable pin. Same RMW dance.
+          rmw(0x16, 1 << 3, false); // GPIO function
+          rmw(0x10, 1 << 3, true);  // output
+          rmw(0x13, 1 << 3, false); // push-pull
+          rmw(0x11, 1 << 3, true);  // drive HIGH -> ES8311 + PA on
+
+          // Give the codec rail a moment to come up before we talk I2C.
+          delay(10);
+
+          // ES8311 init (mirrors M5Unified _speaker_enabled_cb_sticks3).
+          // Register pairs {reg, value} written to codec at 0x18.
+          static const uint8_t es8311_init[][2] = {
+            {0x00, 0x80}, // RESET / CSM power on
+            {0x01, 0xB5}, // CLOCK_MANAGER: MCLK=BCLK
+            {0x02, 0x18}, // CLOCK_MANAGER: MULT_PRE=3
+            {0x0D, 0x01}, // SYSTEM: power up analog
+            {0x12, 0x00}, // SYSTEM: power-up DAC
+            {0x13, 0x10}, // SYSTEM: enable output to HP drive
+            {0x32, 0xBF}, // DAC volume (0xBF = +-0 dB, attenuation via amp)
+            {0x37, 0x08}, // DAC: bypass equalizer
+          };
+          for (auto &p : es8311_init) {
+            uint8_t buf[2] = { p[0], p[1] };
+            id(bus_a)->write(0x18, buf, 2);
+          }
+      - speaker.volume_set:
+          id: rtttl_speaker
+          volume: ${speaker_volume}
+      # Quick boot chime so it's obvious the audio chain is alive.
+      - if:
+          condition:
+            lambda: 'return ${beeps_enabled};'
+          then:
+            - delay: 500ms
+            - rtttl.play: "boot:d=8,o=6,b=220:c,e,g"
 
 esp32:
   board: esp32-s3-devkitc-1
@@ -84,6 +187,11 @@ esp32:
       CONFIG_MBEDTLS_DYNAMIC_BUFFER: y
       CONFIG_MBEDTLS_DYNAMIC_FREE_CONFIG_DATA: y
       CONFIG_MBEDTLS_DYNAMIC_FREE_CA_CERT: y
+      # Disable the Bluetooth controller entirely. We don't use BLE
+      # and the BT controller task shares the radio with WiFi and
+      # consumes RAM — turning it off frees resources and removes
+      # one possible source of intermittent radio-stack crashes.
+      CONFIG_BT_ENABLED: n
 
 psram:
   mode: octal
@@ -131,6 +239,9 @@ binary_sensor:
     id: btn_a
     on_press:
       then:
+        - logger.log:
+            level: INFO
+            format: "Button A (GPIO11/KEY1) pressed"
         - lambda: |-
             // Dismiss: drop straight back to idle
             id(idle_frames) = 0;
@@ -153,18 +264,28 @@ binary_sensor:
             id(screensaver_cooldown) = 4 * ${idle_bouncer_seconds};
         - script.execute: apply_screen_power
 
-  # Charging status from the M5PM1 PMIC: register 0x12 bit 0 is
-  # 0 = charging, 1 = not charging (same probe used by M5Unified).
-  - platform: template
-    name: "Charging"
-    id: charging
-    device_class: battery_charging
-    lambda: |-
-      uint8_t reg = 0x12;
-      if (id(bus_a)->write(0x6e, &reg, 1, false) != i2c::ERROR_OK) return {};
-      uint8_t v;
-      if (id(bus_a)->read(0x6e, &v, 1) != i2c::ERROR_OK) return {};
-      return (v & 0x01) == 0;
+  # Top button (KEY2 / GPIO12). Currently only logs so you can confirm
+  # it is wired; wire up an action here if you want a second control.
+  - platform: gpio
+    pin:
+      number: GPIO12
+      inverted: true
+      mode:
+        input: true
+        pullup: true
+    name: "Button B"
+    id: btn_b
+    on_press:
+      then:
+        - logger.log:
+            level: INFO
+            format: "Button B (GPIO12/KEY2) pressed - forcing events refresh"
+        - if:
+            condition:
+              wifi.connected:
+            then:
+              - lambda: 'id(user_retry_pending) = false;'
+              - script.execute: fetch_user_events
 
 # --- FONTS ---
 # !include ../common/fonts.yaml
@@ -203,24 +324,62 @@ script:
             - light.turn_off:
                 id: backlight_light
 
-  # --- Audio stubs ---
-  # The shared intervals/scripts fragments call these three scripts
-  # instead of `rtttl.play` directly so that devices without a buzzer
-  # (this S3 firmware) can supply empty stubs. Wiring these through the
-  # ES8311 codec + AW8737 amp over I2S is deferred to a future release;
-  # speaker PA toggling would go via M5PM1 GPIO3 (regs 0x10/0x11/0x13/
-  # 0x16 bit 3) over the internal I2C bus.
+  # --- Audio ---
+  # These three scripts are called from the shared intervals/scripts
+  # fragments in place of direct `rtttl.play` so that per-device YAML
+  # controls the actual tune. On the S3 they route through the ES8311
+  # codec configured above. The `speaker_volume` substitution sets a
+  # soft default; individual calls could `speaker.volume_set` before
+  # playing if we ever want per-tune levels.
   - id: play_beep_card
     mode: restart
-    then: []
+    then:
+      - if:
+          condition:
+            lambda: 'return ${beeps_enabled};'
+          then:
+            - rtttl.play: "blip:d=8,o=6,b=220:g,e"
   - id: play_beep_fail
     mode: restart
-    then: []
+    then:
+      - if:
+          condition:
+            lambda: 'return ${beeps_enabled};'
+          then:
+            - rtttl.play: "fail:d=8,o=5,b=220:e,c,a4,p"
   - id: play_beep_ping
     mode: restart
-    then: []
+    then:
+      - if:
+          condition:
+            lambda: 'return ${beeps_enabled};'
+          then:
+            - rtttl.play: "ping:d=16,o=6,b=300:e,g"
 
 # !include ../common/scripts.yaml
+
+# --- Audio (I2S0 -> ES8311 -> AW8737 -> speaker) ---
+# BCLK/LRCK/MCLK/DOUT per M5Unified StickS3 pin map. The codec was
+# powered up and initialised in on_boot above; here we just wire the
+# ESPHome speaker + rtttl components to the same I2S pins.
+i2s_audio:
+  i2s_lrclk_pin: GPIO15
+  i2s_bclk_pin: GPIO17
+  i2s_mclk_pin: GPIO18
+
+speaker:
+  - platform: i2s_audio
+    id: rtttl_speaker
+    dac_type: external
+    i2s_dout_pin: GPIO14
+    sample_rate: 16000
+    bits_per_sample: 16bit
+    channel: stereo
+
+rtttl:
+  id: rtttl_player
+  speaker: rtttl_speaker
+
 spi:
   clk_pin: GPIO40
   mosi_pin: GPIO39
@@ -243,17 +402,17 @@ display:
 # Battery % is derived from the M5PM1 PMIC's on-chip ADC (register
 # pair 0x22/0x23 at I2C address 0x6E, little-endian millivolts). The
 # level curve (3300 mV = 0 %, 4100 mV = 100 %) matches the formula in
-# m5stack/M5Unified Power_Class.cpp. The charging binary sensor reads
-# bit 0 of the PMIC status register 0x12 (0 = charging). The VBUS
-# voltage sensor reads the 0x24/0x25 register pair (same format as
-# battery) so a USB supply is visible in Home Assistant.
+# m5stack/M5Unified Power_Class.cpp. Updated every 5 minutes; battery
+# level moves slowly and more frequent PMIC reads just add I2C-bus
+# contention. Charging / VBUS sensors were removed because nothing
+# in the UI consumes them.
 sensor:
   - platform: template
     name: "Battery Level"
     id: battery_level
     unit_of_measurement: "%"
     accuracy_decimals: 0
-    update_interval: 60s
+    update_interval: 300s
     lambda: |-
       uint8_t reg = 0x22;
       if (id(bus_a)->write(0x6e, &reg, 1, false) != i2c::ERROR_OK) return NAN;
@@ -266,16 +425,32 @@ sensor:
       if (level > 100) level = 100;
       return (float) level;
 
-  - platform: template
-    name: "USB Voltage"
-    id: vbus_voltage
-    unit_of_measurement: "V"
-    accuracy_decimals: 2
+  # Liveness diagnostics exposed to HA (or web_server on the standalone
+  # variant) so long-term stability can be tracked without tailing
+  # the UART. Updated once a minute; the heartbeat log tag "hb" keeps
+  # the higher-resolution view.
+  - platform: uptime
+    name: "Uptime"
+    id: dev_uptime
     update_interval: 60s
-    lambda: |-
-      uint8_t reg = 0x24;
-      if (id(bus_a)->write(0x6e, &reg, 1, false) != i2c::ERROR_OK) return NAN;
-      uint8_t buf[2];
-      if (id(bus_a)->read(0x6e, buf, 2) != i2c::ERROR_OK) return NAN;
-      int mv = (buf[1] << 8) | buf[0];
-      return mv / 1000.0f;
+  - platform: template
+    name: "Free Heap"
+    id: dev_free_heap
+    unit_of_measurement: "B"
+    accuracy_decimals: 0
+    update_interval: 60s
+    lambda: 'return (float) esp_get_free_heap_size();'
+  - platform: template
+    name: "Min Free Heap"
+    id: dev_min_free_heap
+    unit_of_measurement: "B"
+    accuracy_decimals: 0
+    update_interval: 60s
+    lambda: 'return (float) esp_get_minimum_free_heap_size();'
+  - platform: template
+    name: "Free PSRAM"
+    id: dev_free_psram
+    unit_of_measurement: "B"
+    accuracy_decimals: 0
+    update_interval: 60s
+    lambda: 'return (float) heap_caps_get_free_size(MALLOC_CAP_SPIRAM);'

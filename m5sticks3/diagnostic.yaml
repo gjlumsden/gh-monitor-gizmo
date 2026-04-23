@@ -1,0 +1,681 @@
+# ---------------------------------------------------------------------------
+# Minimal diagnostic firmware for the M5 StickS3 K150 "GH Monitor Gizmo".
+#
+# STEP 6: STEP 5 + GraphQL POST bodies (fetch_stats_graphql /
+# fetch_stats_search / fetch_cal_graphql). STEP 5 cleared past 400s+
+# with flat heap through 10 full event-fetch/carousel cycles. The
+# only I/O pattern the main firmware uses that's still missing from
+# the diagnostic is http_request.post to api.github.com/graphql with
+# a lambda-built JSON body and 8-20 KB response buffers. If this
+# crashes with the idle-task fault, the POST/GraphQL code path is
+# the trigger.
+#
+# Flash directly (no build.py needed):
+#   esphome run m5sticks3/diagnostic.yaml
+# ---------------------------------------------------------------------------
+
+substitutions:
+  static_ip: "192.168.4.195"
+  gateway:   "192.168.4.1"
+  subnet:    "255.255.255.0"
+  dns1:      "1.1.1.1"
+  dns2:      "8.8.8.8"
+  rotate_display: "90"
+  backlight_brightness: "0.4"
+  speaker_volume: "0.15"
+  github_user: !secret ghgizmo_github_user
+  github_token: !secret ghgizmo_github_token
+
+esphome:
+  name: ghmonitorgizmo-s3
+  friendly_name: GH Monitor Gizmo S3 (diag)
+  on_boot:
+    priority: 600
+    then:
+      - lambda: |-
+          // Clear PMIC watchdog/config
+          uint8_t wdg[2] = { 0x09, 0x00 };
+          id(bus_a)->write(0x6e, wdg, 2);
+
+          auto rmw = [](uint8_t reg, uint8_t mask, bool set) {
+            uint8_t r = reg;
+            if (id(bus_a)->write(0x6e, &r, 1, false) != i2c::ERROR_OK) return;
+            uint8_t v;
+            if (id(bus_a)->read(0x6e, &v, 1) != i2c::ERROR_OK) return;
+            uint8_t nv = set ? (v | mask) : (v & ~mask);
+            uint8_t buf[2] = { reg, nv };
+            id(bus_a)->write(0x6e, buf, 2);
+          };
+          // Enable L3B rail (LCD power) on PM1 GPIO2.
+          rmw(0x16, 1 << 2, false);
+          rmw(0x10, 1 << 2, true);
+          rmw(0x13, 1 << 2, false);
+          rmw(0x11, 1 << 2, true);
+
+          // Audio enable on PM1 GPIO3: powers ES8311 codec + AW8737 amp.
+          rmw(0x16, 1 << 3, false);
+          rmw(0x10, 1 << 3, true);
+          rmw(0x13, 1 << 3, false);
+          rmw(0x11, 1 << 3, true);
+          delay(10);
+
+          // ES8311 init (mirrors M5Unified _speaker_enabled_cb_sticks3).
+          static const uint8_t es8311_init[][2] = {
+            {0x00, 0x80},
+            {0x01, 0xB5},
+            {0x02, 0x18},
+            {0x0D, 0x01},
+            {0x12, 0x00},
+            {0x13, 0x10},
+            {0x32, 0xBF},
+            {0x37, 0x08},
+          };
+          for (auto &p : es8311_init) {
+            uint8_t buf[2] = { p[0], p[1] };
+            id(bus_a)->write(0x18, buf, 2);
+          }
+      - speaker.volume_set:
+          id: rtttl_speaker
+          volume: ${speaker_volume}
+      - delay: 500ms
+      - rtttl.play: "boot:d=8,o=6,b=220:c,e,g"
+
+esp32:
+  board: esp32-s3-devkitc-1
+  variant: esp32s3
+  flash_size: 8MB
+  framework:
+    type: esp-idf
+    sdkconfig_options:
+      CONFIG_ESPTOOLPY_FLASHSIZE_8MB: y
+      CONFIG_SPIRAM: y
+      CONFIG_SPIRAM_MODE_OCT: y
+      CONFIG_SPIRAM_SPEED_80M: y
+      CONFIG_SPIRAM_USE_MALLOC: y
+      CONFIG_BT_ENABLED: n
+
+psram:
+  mode: octal
+  speed: 80MHz
+
+logger:
+  level: DEBUG
+
+ota:
+  - platform: esphome
+    password: !secret ghgizmo_ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  manual_ip:
+    static_ip: ${static_ip}
+    gateway: ${gateway}
+    subnet: ${subnet}
+    dns1: ${dns1}
+    dns2: ${dns2}
+  ap:
+    ssid: "GH Monitor Gizmo"
+    password: !secret ghgizmo_ap_password
+
+api:
+  encryption:
+    key: !secret ghgizmo_api_encryption_key
+
+time:
+  - platform: sntp
+    id: sntp_time
+    timezone: "UTC"
+
+i2c:
+  id: bus_a
+  sda: GPIO47
+  scl: GPIO48
+  scan: true
+
+output:
+  - platform: ledc
+    pin: GPIO38
+    id: backlight_pwm
+    frequency: 1000Hz
+
+light:
+  - platform: monochromatic
+    id: backlight_light
+    output: backlight_pwm
+    default_transition_length: 100ms
+    restore_mode: ALWAYS_ON
+    internal: true
+
+spi:
+  clk_pin: GPIO40
+  mosi_pin: GPIO39
+
+# --- Audio (I2S0 -> ES8311 -> AW8737 -> speaker) ---
+i2s_audio:
+  i2s_lrclk_pin: GPIO15
+  i2s_bclk_pin: GPIO17
+  i2s_mclk_pin: GPIO18
+
+speaker:
+  - platform: i2s_audio
+    id: rtttl_speaker
+    dac_type: external
+    i2s_dout_pin: GPIO14
+    sample_rate: 16000
+    bits_per_sample: 16bit
+    channel: stereo
+
+rtttl:
+  id: rtttl_player
+  speaker: rtttl_speaker
+
+# --- HTTP client (TLS to api.github.com) ---
+http_request:
+  id: http_client
+  verify_ssl: false
+  timeout: 10s
+  useragent: ghgizmo-diag/1.0
+
+# --- STEP 4: real authenticated fetch with Filter + deserializeJson ---
+# Mirrors common/scripts.yaml fetch_user_events: 32 KB buffer,
+# Authorization: Bearer header, JsonDocument + Filter, deserializeJson
+# on a JSON array. Stripped of UI globals so the only thing we
+# exercise is the risky core.
+script:
+  - id: fetch_events_diag
+    mode: restart
+    then:
+      - http_request.get:
+          url: "https://api.github.com/users/${github_user}/events?per_page=10"
+          max_response_buffer_size: 32768
+          request_headers:
+            Authorization: "Bearer ${github_token}"
+            Accept: "application/vnd.github+json"
+            X-GitHub-Api-Version: "2022-11-28"
+          capture_response: true
+          on_error:
+            - logger.log: { format: "events fetch failed", level: WARN, tag: "gh" }
+          on_response:
+            then:
+              - lambda: |-
+                  if (response->status_code != 200) {
+                    ESP_LOGW("gh", "events HTTP %d", response->status_code);
+                    return;
+                  }
+                  // Filter - keep only fields the main firmware keeps.
+                  JsonDocument filter;
+                  filter[0]["id"] = true;
+                  filter[0]["type"] = true;
+                  filter[0]["created_at"] = true;
+                  filter[0]["repo"]["name"] = true;
+                  filter[0]["actor"]["login"] = true;
+                  filter[0]["payload"]["workflow_run"]["status"] = true;
+                  filter[0]["payload"]["workflow_run"]["conclusion"] = true;
+                  filter[0]["payload"]["workflow_run"]["actor"]["login"] = true;
+                  filter[0]["payload"]["workflow_run"]["triggering_actor"]["login"] = true;
+                  filter[0]["payload"]["check_run"]["status"] = true;
+                  filter[0]["payload"]["check_run"]["conclusion"] = true;
+                  filter[0]["payload"]["pull_request"]["user"]["login"] = true;
+                  filter[0]["payload"]["pull_request"]["requested_reviewers"][0]["login"] = true;
+                  filter[0]["payload"]["review"]["user"]["login"] = true;
+                  filter[0]["payload"]["comment"]["user"]["login"] = true;
+                  filter[0]["payload"]["issue"]["user"]["login"] = true;
+                  filter[0]["payload"]["ref"] = true;
+                  filter[0]["payload"]["ref_type"] = true;
+                  filter[0]["payload"]["action"] = true;
+                  filter[0]["payload"]["issue"]["number"] = true;
+                  filter[0]["payload"]["pull_request"]["number"] = true;
+
+                  JsonDocument doc;
+                  DeserializationError err = deserializeJson(doc, body,
+                      DeserializationOption::Filter(filter));
+                  if (err) {
+                    ESP_LOGW("gh", "json parse failed: %s", err.c_str());
+                    return;
+                  }
+                  JsonArray arr = doc.as<JsonArray>();
+                  int n = arr.isNull() ? -1 : (int) arr.size();
+                  ESP_LOGI("gh", "events ok body=%u parsed=%d mem=%u",
+                           (unsigned) body.length(), n,
+                           (unsigned) doc.memoryUsage());
+                  if (n <= 0) return;
+
+                  // ----- STEP 5: post-parse string-churn workload -----
+                  // Mirror the make_line / make_detail / age_suffix /
+                  // sort / push_back pattern from fetch_user_events,
+                  // including the active-repo upsert. Skip UI side.
+                  auto days_from_civil = [](int y, unsigned m, unsigned d) -> long {
+                    y -= m <= 2;
+                    const long era = (y >= 0 ? y : y - 399) / 400;
+                    const unsigned yoe = static_cast<unsigned>(y - era * 400);
+                    const unsigned doy = (153 * (m > 2 ? m - 3 : m + 9) + 2) / 5 + d - 1;
+                    const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+                    return era * 146097L + static_cast<long>(doe) - 719468L;
+                  };
+                  auto age_suffix = [&](const char *created_at) -> std::string {
+                    if (!created_at || !*created_at) return "";
+                    int Y, M, D, h, mi, s;
+                    if (sscanf(created_at, "%d-%d-%dT%d:%d:%dZ",
+                               &Y, &M, &D, &h, &mi, &s) != 6) return "";
+                    long days = days_from_civil(Y, (unsigned) M, (unsigned) D);
+                    time_t ev_t = (time_t) days * 86400 + h * 3600 + mi * 60 + s;
+                    auto now = id(sntp_time).now();
+                    if (!now.is_valid()) return "";
+                    long secs = (long) now.timestamp - (long) ev_t;
+                    if (secs < 0) secs = 0;
+                    char b[16];
+                    if (secs < 90)            snprintf(b, sizeof(b), " %lds ago", secs);
+                    else if (secs < 90 * 60)  snprintf(b, sizeof(b), " %ldm ago", secs / 60);
+                    else if (secs < 48 * 3600) snprintf(b, sizeof(b), " %ldh ago", secs / 3600);
+                    else                      snprintf(b, sizeof(b), " %ldd ago", secs / 86400);
+                    return std::string(b);
+                  };
+                  auto make_line = [](JsonObject obj) -> std::string {
+                    std::string type = obj["type"] | "";
+                    std::string label;
+                    if      (type == "PushEvent")              label = "Push";
+                    else if (type == "PullRequestEvent")       label = "PR";
+                    else if (type == "PullRequestReviewEvent") label = "Review";
+                    else if (type == "IssuesEvent")            label = "Issue";
+                    else if (type == "IssueCommentEvent")      label = "Comment";
+                    else if (type == "WatchEvent")             label = "Star";
+                    else if (type == "ForkEvent")              label = "Fork";
+                    else if (type == "ReleaseEvent")           label = "Release";
+                    else if (type == "WorkflowRunEvent")       label = "CI";
+                    else                                       label = type;
+                    return label;
+                  };
+                  auto make_detail = [](JsonObject obj) -> std::string {
+                    std::string repo = obj["repo"]["name"] | "";
+                    auto slash = repo.find('/');
+                    return (slash == std::string::npos) ? repo : repo.substr(slash + 1);
+                  };
+
+                  // Active-repo upsert
+                  {
+                    auto now = id(sntp_time).now();
+                    uint32_t now_ts = now.is_valid() ? (uint32_t) now.timestamp : 0;
+                    for (JsonObject ev : arr) {
+                      std::string t = ev["type"] | "";
+                      if (t != "PushEvent" && t != "PullRequestEvent") continue;
+                      const char *rn = ev["repo"]["name"] | (const char *) nullptr;
+                      if (!rn || !*rn) continue;
+                      std::string name(rn);
+                      bool found = false;
+                      for (size_t i = 0; i < id(active_repo_names).size(); i++) {
+                        if (id(active_repo_names)[i] == name) {
+                          id(active_repo_seen)[i] = now_ts;
+                          found = true;
+                          break;
+                        }
+                      }
+                      if (!found) {
+                        id(active_repo_names).push_back(name);
+                        id(active_repo_seen).push_back(now_ts);
+                      }
+                    }
+                  }
+
+                  // Sort + per-event line/detail/age string build
+                  std::vector<int> order;
+                  order.reserve(n);
+                  for (int i = 0; i < n; i++) order.push_back(i);
+                  std::sort(order.begin(), order.end(),
+                            [&](int a, int b) {
+                              const char *ca = arr[a]["created_at"] | "";
+                              const char *cb = arr[b]["created_at"] | "";
+                              return strcmp(ca, cb) > 0;
+                            });
+                  std::vector<std::string> new_lines;
+                  std::vector<std::string> new_detail;
+                  std::vector<uint8_t> new_copilot;
+                  std::vector<uint8_t> new_ci_fail;
+                  std::string new_top;
+                  for (int oi = 0; oi < n; oi++) {
+                    int i = order[oi];
+                    JsonObject ev = arr[i].as<JsonObject>();
+                    if (oi == 0) new_top = ev["id"] | "";
+                    std::string line = make_line(ev);
+                    line += age_suffix(ev["created_at"] | (const char*) nullptr);
+                    std::string detail = make_detail(ev);
+                    new_lines.push_back(line);
+                    new_detail.push_back(detail);
+                    new_copilot.push_back(0);
+                    new_ci_fail.push_back(0);
+                  }
+                  std::reverse(new_lines.begin(), new_lines.end());
+                  std::reverse(new_detail.begin(), new_detail.end());
+
+                  // Replace globals - this is the heap-churn pattern:
+                  // assignment frees old vector contents, allocates new.
+                  id(carousel_lines)   = new_lines;
+                  id(carousel_detail)  = new_detail;
+                  id(carousel_copilot) = new_copilot;
+                  id(carousel_ci_fail) = new_ci_fail;
+                  id(last_top_event_id) = new_top;
+
+                  ESP_LOGI("gh", "carousel n=%u repos=%u top=%s",
+                           (unsigned) id(carousel_lines).size(),
+                           (unsigned) id(active_repo_names).size(),
+                           id(last_top_event_id).c_str());
+
+  # STEP 6: minimal GraphQL stats fetch (mirrors fetch_stats_graphql).
+  # POST body built in a lambda, 8 KB response buffer. Uses the
+  # `viewer` contribution aggregate so it exercises the same code
+  # path regardless of whether private contributions are enabled.
+  - id: fetch_stats_diag
+    mode: restart
+    then:
+      - http_request.post:
+          url: "https://api.github.com/graphql"
+          max_response_buffer_size: 8192
+          request_headers:
+            Authorization: "Bearer ${github_token}"
+            Accept: "application/vnd.github+json"
+            Content-Type: "application/json"
+          body: !lambda |-
+            auto pad2 = [](int v) {
+              char b[4]; snprintf(b, sizeof(b), "%02d", v); return std::string(b);
+            };
+            auto now = id(sntp_time).now();
+            std::string year_start = "2026-01-01T00:00:00Z";
+            if (now.is_valid()) {
+              char ybuf[8]; snprintf(ybuf, sizeof(ybuf), "%04d", now.year);
+              year_start = std::string(ybuf) + "-01-01T00:00:00Z";
+            }
+            std::string q =
+              "query(\044yearStart:DateTime!){"
+              " viewer{ contributionsCollection(from:\044yearStart){"
+              " totalCommitContributions totalPullRequestContributions"
+              " totalPullRequestReviewContributions totalIssueContributions } } }";
+            std::string body;
+            body.reserve(512);
+            body += "{\"query\":\"";
+            for (char c : q) { if (c == '"') body += "\\\""; else body += c; }
+            body += "\",\"variables\":{\"yearStart\":\"" + year_start + "\"}}";
+            return body;
+          capture_response: true
+          on_error:
+            - logger.log: { format: "stats fetch failed", level: WARN, tag: "gh" }
+          on_response:
+            then:
+              - lambda: |-
+                  if (response->status_code != 200) {
+                    ESP_LOGW("gh", "stats HTTP %d", response->status_code);
+                    return;
+                  }
+                  JsonDocument doc;
+                  DeserializationError err = deserializeJson(doc, body);
+                  if (err) {
+                    ESP_LOGW("gh", "stats parse failed: %s", err.c_str());
+                    return;
+                  }
+                  JsonObject cc = doc["data"]["viewer"]["contributionsCollection"];
+                  int commits = cc["totalCommitContributions"] | 0;
+                  int prs     = cc["totalPullRequestContributions"] | 0;
+                  int reviews = cc["totalPullRequestReviewContributions"] | 0;
+                  int issues  = cc["totalIssueContributions"] | 0;
+                  ESP_LOGI("gh", "stats body=%u commits=%d prs=%d reviews=%d issues=%d",
+                           (unsigned) body.length(),
+                           commits, prs, reviews, issues);
+
+  # STEP 6: larger GraphQL fetch with 20 KB buffer (mirrors
+  # fetch_cal_graphql). Pulls the contribution calendar weeks array
+  # so we exercise a multi-KB JSON response through the POST path.
+  - id: fetch_cal_diag
+    mode: restart
+    then:
+      - http_request.post:
+          url: "https://api.github.com/graphql"
+          max_response_buffer_size: 20480
+          request_headers:
+            Authorization: "Bearer ${github_token}"
+            Accept: "application/vnd.github+json"
+            Content-Type: "application/json"
+          body: !lambda |-
+            auto now = id(sntp_time).now();
+            std::string from = "2026-01-01T00:00:00Z";
+            std::string to   = "2026-12-31T23:59:59Z";
+            if (now.is_valid()) {
+              char buf[24];
+              // 5 weeks back from today
+              time_t t = now.timestamp - (5L * 7 * 86400);
+              struct tm ft; gmtime_r(&t, &ft);
+              snprintf(buf, sizeof(buf), "%04d-%02d-%02dT00:00:00Z",
+                       ft.tm_year + 1900, ft.tm_mon + 1, ft.tm_mday);
+              from = buf;
+              snprintf(buf, sizeof(buf), "%04d-%02d-%02dT23:59:59Z",
+                       now.year, now.month, now.day_of_month);
+              to = buf;
+            }
+            std::string q =
+              "query(\044from:DateTime!,\044to:DateTime!){"
+              " viewer{ contributionsCollection(from:\044from,to:\044to){"
+              " contributionCalendar{ totalContributions"
+              " weeks{ contributionDays{ date contributionCount } } } } } }";
+            std::string body;
+            body.reserve(1024);
+            body += "{\"query\":\"";
+            for (char c : q) { if (c == '"') body += "\\\""; else body += c; }
+            body += "\",\"variables\":{";
+            body += "\"from\":\"" + from + "\",";
+            body += "\"to\":\"" + to + "\"";
+            body += "}}";
+            return body;
+          capture_response: true
+          on_error:
+            - logger.log: { format: "cal fetch failed", level: WARN, tag: "gh" }
+          on_response:
+            then:
+              - lambda: |-
+                  if (response->status_code != 200) {
+                    ESP_LOGW("gh", "cal HTTP %d", response->status_code);
+                    return;
+                  }
+                  JsonDocument filter;
+                  filter["data"]["viewer"]["contributionsCollection"]
+                        ["contributionCalendar"]["totalContributions"] = true;
+                  filter["data"]["viewer"]["contributionsCollection"]
+                        ["contributionCalendar"]["weeks"][0]
+                        ["contributionDays"][0]["contributionCount"] = true;
+                  JsonDocument doc;
+                  DeserializationError err = deserializeJson(doc, body,
+                      DeserializationOption::Filter(filter));
+                  if (err) {
+                    ESP_LOGW("gh", "cal parse failed: %s", err.c_str());
+                    return;
+                  }
+                  int total = doc["data"]["viewer"]["contributionsCollection"]
+                                 ["contributionCalendar"]["totalContributions"] | 0;
+                  JsonArray weeks = doc["data"]["viewer"]
+                                       ["contributionsCollection"]
+                                       ["contributionCalendar"]["weeks"]
+                                       .as<JsonArray>();
+                  int weeks_n = weeks.isNull() ? -1 : (int) weeks.size();
+                  ESP_LOGI("gh", "cal body=%u total=%d weeks=%d mem=%u",
+                           (unsigned) body.length(), total, weeks_n,
+                           (unsigned) doc.memoryUsage());
+
+font:
+  - file: "gfonts://Roboto"
+    id: font_small
+    size: 14
+
+globals:
+  - id: gh_x
+    type: int
+    initial_value: '20'
+  - id: gh_y
+    type: int
+    initial_value: '40'
+  - id: gh_vx
+    type: int
+    initial_value: '3'
+  - id: gh_vy
+    type: int
+    initial_value: '2'
+  - id: gh_color_idx
+    type: int
+    initial_value: '0'
+  # STEP 5: carousel vectors that mirror the heap-churning push_back/
+  # clear pattern from common/scripts.yaml fetch_user_events.
+  - id: carousel_lines
+    type: std::vector<std::string>
+    restore_value: no
+  - id: carousel_detail
+    type: std::vector<std::string>
+    restore_value: no
+  - id: carousel_copilot
+    type: std::vector<uint8_t>
+    restore_value: no
+  - id: carousel_ci_fail
+    type: std::vector<uint8_t>
+    restore_value: no
+  - id: active_repo_names
+    type: std::vector<std::string>
+    restore_value: no
+  - id: active_repo_seen
+    type: std::vector<uint32_t>
+    restore_value: no
+  - id: last_top_event_id
+    type: std::string
+    restore_value: no
+
+binary_sensor:
+  - platform: gpio
+    pin:
+      number: GPIO11
+      inverted: true
+      mode:
+        input: true
+        pullup: true
+    name: "Button A"
+    id: btn_a
+
+display:
+  - platform: st7789v
+    model: CUSTOM
+    id: main_display
+    cs_pin: GPIO41
+    dc_pin: GPIO45
+    reset_pin: GPIO21
+    rotation: ${rotate_display}
+    height: 240
+    width: 135
+    offset_height: 40
+    offset_width: 52
+    update_interval: 250ms
+    lambda: |-
+      const int W = 240, H = 135;
+      const int GW = 52, GH = 64;
+      const int TOP = 22;
+      static const Color palette[5] = {
+        Color(0xFF, 0xFF, 0xFF),
+        Color(0xFF, 0x55, 0x55),
+        Color(0x55, 0xFF, 0x55),
+        Color(0x55, 0x55, 0xFF),
+        Color(0xFF, 0xFF, 0x55),
+      };
+      it.fill(Color::BLACK);
+      Color c = palette[id(gh_color_idx) % 5];
+      // Octocat stand-in: filled rounded rect + eyes
+      it.filled_rectangle(id(gh_x), id(gh_y), GW, GH, c);
+      it.filled_circle(id(gh_x) + 15, id(gh_y) + 22, 5, Color::BLACK);
+      it.filled_circle(id(gh_x) + 37, id(gh_y) + 22, 5, Color::BLACK);
+      it.printf(4, 4, id(font_small), Color(0xAA, 0xAA, 0xAA),
+                "diag  up=%us", (unsigned)(millis() / 1000));
+
+interval:
+  - interval: 250ms
+    then:
+      - lambda: |-
+          const int W = 240, H = 135;
+          const int GW = 52, GH = 64;
+          const int TOP = 22;
+          int x = id(gh_x) + id(gh_vx);
+          int y = id(gh_y) + id(gh_vy);
+          bool bounced = false;
+          if (x <= 0)           { x = 0;       id(gh_vx) = -id(gh_vx); bounced = true; }
+          else if (x >= W - GW) { x = W - GW;  id(gh_vx) = -id(gh_vx); bounced = true; }
+          if (y <= TOP)         { y = TOP;     id(gh_vy) = -id(gh_vy); bounced = true; }
+          else if (y >= H - GH) { y = H - GH;  id(gh_vy) = -id(gh_vy); bounced = true; }
+          id(gh_x) = x;
+          id(gh_y) = y;
+          if (bounced) id(gh_color_idx) = (id(gh_color_idx) + 1) % 5;
+
+  # Liveness heartbeat.
+  - interval: 30s
+    startup_delay: 15s
+    then:
+      - lambda: |-
+          uint32_t up = millis() / 1000;
+          size_t heap_free = esp_get_free_heap_size();
+          size_t heap_min  = esp_get_minimum_free_heap_size();
+          size_t internal_free = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+          size_t internal_largest = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+          size_t psram_free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+          ESP_LOGI("hb", "up=%us heap=%u min=%u int=%u/largest=%u psram=%u",
+                   (unsigned) up, (unsigned) heap_free, (unsigned) heap_min,
+                   (unsigned) internal_free, (unsigned) internal_largest,
+                   (unsigned) psram_free);
+
+  # Periodic chime so the I2S / speaker task is actually exercised,
+  # not just initialised. 30 s cadence mirrors the main firmware's
+  # per-card / alert beep rate.
+  - interval: 30s
+    startup_delay: 20s
+    then:
+      - rtttl.play: "blip:d=8,o=6,b=220:g,e"
+
+  # STEP 4: 7 staggered authenticated fetches matching the main
+  # firmware's exact schedule (t+30/45/50/60/75/90/120s). All call
+  # the same mode:restart script so overlapping fires cancel-and-
+  # restart just like real operation. Only the timing is mirrored;
+  # the target URL is the same (user events) since that's the
+  # script with the biggest JSON payload.
+  - interval: 60s
+    startup_delay: 30s
+    then:
+      - script.execute: fetch_events_diag
+
+  - interval: 600s
+    startup_delay: 45s
+    then:
+      - script.execute: fetch_events_diag
+
+  - interval: 60s
+    startup_delay: 50s
+    then:
+      - script.execute: fetch_events_diag
+
+  - interval: 600s
+    startup_delay: 60s
+    then:
+      - script.execute: fetch_events_diag
+
+  - interval: 900s
+    startup_delay: 75s
+    then:
+      - script.execute: fetch_events_diag
+
+  - interval: 600s
+    startup_delay: 90s
+    then:
+      - script.execute: fetch_events_diag
+
+  - interval: 900s
+    startup_delay: 120s
+    then:
+      - script.execute: fetch_events_diag
+
+  # STEP 6: GraphQL POST paths at main firmware's exact offsets.
+  - interval: 600s
+    startup_delay: 60s
+    then:
+      - script.execute: fetch_stats_diag
+
+  - interval: 900s
+    startup_delay: 75s
+    then:
+      - script.execute: fetch_cal_diag

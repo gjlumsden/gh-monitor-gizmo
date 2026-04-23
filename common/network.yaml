@@ -1,5 +1,8 @@
 logger:
-  level: WARN
+  # INFO on normal builds keeps UART quiet enough that heavy fetch
+  # cycles can't backpressure the scheduler on the S3. Raise to DEBUG
+  # temporarily when diagnosing a specific subsystem.
+  level: INFO
 
 ota:
   - platform: esphome

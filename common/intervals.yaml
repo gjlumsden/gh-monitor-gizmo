@@ -100,7 +100,7 @@ interval:
               int n = 0;
               if (id(copilot_ok))   screens[n++] = 1;
               if (id(stats_ok))   { screens[n++] = 2; screens[n++] = 3; }
-              if (id(ci_running) + id(ci_success) + id(ci_failed) > 0) screens[n++] = 4;
+              if (${ci_enabled} && id(ci_running) + id(ci_success) + id(ci_failed) > 0) screens[n++] = 4;
               if (id(ratelimit_ok)) screens[n++] = 5;
               if (id(stats_ok) && id(streak_days) + id(best_day_count) > 0) screens[n++] = 6;
               if (id(stats_ok) && (id(issues_assigned_open) + id(issues_authored_open) + id(issues_closed_week) > 0)) screens[n++] = 7;
@@ -167,6 +167,23 @@ interval:
           then:
             - lambda: 'id(user_retry_pending) = false;'
             - script.execute: fetch_user_events
+
+  # GitHub Actions workflow-run aggregator. Runs 30 s after
+  # fetch_user_events so the active-repo tracker has been populated
+  # from the most recent events page. Only fires when
+  # workflow_runs_enabled is "true" (the S3 firmware); on the
+  # Plus 1.1 this compiles down to an unconditional-skip.
+  - interval: 60s
+    startup_delay: 50s
+    then:
+      - if:
+          condition:
+            and:
+              - wifi.connected:
+              - lambda: 'return ${workflow_runs_enabled};'
+              - lambda: 'return id(idle_ui_active);'
+          then:
+            - script.execute: fetch_workflow_runs
 
   - interval: 600s
     startup_delay: 45s
@@ -236,4 +253,25 @@ interval:
   - interval: 30s
     then:
       - script.execute: apply_screen_power
+
+  # Liveness heartbeat. Logs uptime + free heap (and on the S3,
+  # free PSRAM) every 30 s so that after a "previous boot" crash
+  # we can see whether the device was leaking, fragmenting, or
+  # otherwise unhealthy in the run-up to the fault.
+  - interval: 30s
+    startup_delay: 15s
+    then:
+      - lambda: |-
+          uint32_t up = millis() / 1000;
+          size_t heap_free = esp_get_free_heap_size();
+          size_t heap_min  = esp_get_minimum_free_heap_size();
+          size_t internal_free = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+          size_t internal_largest = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+          // PSRAM caps return 0 on chips without it, so this line is
+          // safe on the M5StickC Plus too.
+          size_t psram_free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+          ESP_LOGI("hb", "up=%us heap=%u min=%u int=%u/largest=%u psram=%u",
+                   (unsigned) up, (unsigned) heap_free, (unsigned) heap_min,
+                   (unsigned) internal_free, (unsigned) internal_largest,
+                   (unsigned) psram_free);
 

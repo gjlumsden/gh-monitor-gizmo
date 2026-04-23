@@ -191,11 +191,69 @@
                       }
                     }
                   }
-                  id(ci_running) = running;
-                  id(ci_success) = succ;
-                  id(ci_failed)  = fail;
-                  ESP_LOGI("github", "ci tally from events page: run=%d ok=%d fail=%d",
-                           running, succ, fail);
+                  // On firmware variants where fetch_workflow_runs is
+                  // authoritative (the S3), skip this per-page tally
+                  // so we don't briefly overwrite real aggregates
+                  // every minute. The assignment is compiled out when
+                  // workflow_runs_enabled is "true".
+                  if (!${workflow_runs_enabled}) {
+                    id(ci_running) = running;
+                    id(ci_success) = succ;
+                    id(ci_failed)  = fail;
+                    ESP_LOGI("github", "ci tally from events page: run=%d ok=%d fail=%d",
+                             running, succ, fail);
+                  }
+
+                  // Active-repo tracker: every push/PR event upserts
+                  // its repo.name with the event's created_at epoch
+                  // (falling back to 'now' if parsing fails). The S3
+                  // firmware consumes this in fetch_workflow_runs to
+                  // poll real GitHub Actions state for each recently
+                  // active repo. Harmless on the Plus 1.1 where the
+                  // CI UI is compiled out.
+                  {
+                    auto now = id(sntp_time).now();
+                    uint32_t now_ts = now.is_valid() ? (uint32_t) now.timestamp : 0;
+                    for (JsonObject ev : arr) {
+                      std::string t = ev["type"] | "";
+                      if (t != "PushEvent" && t != "PullRequestEvent") continue;
+                      const char *rn = ev["repo"]["name"] | (const char *) nullptr;
+                      if (!rn || !*rn) continue;
+                      std::string name(rn);
+                      // Parse created_at so late-arriving events don't
+                      // bump an older repo ahead of newer activity.
+                      uint32_t seen_ts = now_ts;
+                      int Y, M, D, h, mi, s;
+                      const char *ca = ev["created_at"] | "";
+                      if (sscanf(ca, "%d-%d-%dT%d:%d:%dZ",
+                                 &Y, &M, &D, &h, &mi, &s) == 6) {
+                        int yy = Y - (M <= 2);
+                        int era = (yy >= 0 ? yy : yy - 399) / 400;
+                        unsigned yoe = (unsigned)(yy - era * 400);
+                        unsigned doy = (153u * ((unsigned)(M > 2 ? M - 3 : M + 9)) + 2u) / 5u
+                                       + (unsigned) D - 1u;
+                        unsigned doe = yoe * 365u + yoe / 4u - yoe / 100u + doy;
+                        long days = (long) era * 146097L + (long) doe - 719468L;
+                        seen_ts = (uint32_t)(days * 86400L + h * 3600 + mi * 60 + s);
+                      }
+                      bool found = false;
+                      for (size_t i = 0; i < id(active_repo_names).size(); i++) {
+                        if (id(active_repo_names)[i] == name) {
+                          if (seen_ts > id(active_repo_seen)[i]) {
+                            id(active_repo_seen)[i] = seen_ts;
+                          }
+                          found = true;
+                          break;
+                        }
+                      }
+                      if (!found) {
+                        id(active_repo_names).push_back(name);
+                        id(active_repo_seen).push_back(seen_ts);
+                      }
+                    }
+                    ESP_LOGI("github", "active repos tracked: %d",
+                             (int) id(active_repo_names).size());
+                  }
 
                   int count = arr.size();
                   ESP_LOGI("github", "user events fetched: %d event(s) on page", count);
@@ -338,6 +396,126 @@
                     - lambda: 'id(pending_beep) = false;'
                     - script.execute: play_beep_ping
 
+  # GitHub Actions workflow-run aggregator. Iterates the active_repo
+  # tracker (populated by fetch_user_events from push/PR events),
+  # prunes entries older than active_repo_window_minutes, caps the
+  # list at active_repo_cap, then fetches
+  # /repos/:owner/:name/actions/runs?per_page=5 for each remaining
+  # repo and tallies status across them. The result overwrites
+  # ci_running/ci_success/ci_failed. Only wired up on firmware
+  # variants where workflow_runs_enabled is "true" (the S3).
+  - id: fetch_workflow_runs
+    mode: single
+    then:
+      - lambda: |-
+          // Prune stale repos and cap the survivors at the newest
+          // active_repo_cap entries (sorted by last-seen desc). This
+          // is the only place we mutate the tracker vectors other
+          // than the upsert in fetch_user_events, so resizing here
+          // keeps memory bounded across long uptimes.
+          auto now = id(sntp_time).now();
+          uint32_t now_ts = now.is_valid() ? (uint32_t) now.timestamp : 0;
+          const uint32_t window = ${active_repo_window_minutes} * 60u;
+          std::vector<std::string> names;
+          std::vector<uint32_t>    seen;
+          for (size_t i = 0; i < id(active_repo_names).size(); i++) {
+            uint32_t ts = id(active_repo_seen)[i];
+            if (now_ts == 0 || now_ts - ts <= window) {
+              names.push_back(id(active_repo_names)[i]);
+              seen.push_back(ts);
+            }
+          }
+          std::vector<size_t> order(names.size());
+          for (size_t i = 0; i < order.size(); i++) order[i] = i;
+          std::sort(order.begin(), order.end(),
+                    [&](size_t a, size_t b) { return seen[a] > seen[b]; });
+          const size_t cap = ${active_repo_cap};
+          std::vector<std::string> top_names;
+          std::vector<uint32_t>    top_seen;
+          for (size_t i = 0; i < order.size() && top_names.size() < cap; i++) {
+            top_names.push_back(names[order[i]]);
+            top_seen.push_back(seen[order[i]]);
+          }
+          id(active_repo_names) = top_names;
+          id(active_repo_seen)  = top_seen;
+          id(wf_tmp_running) = 0;
+          id(wf_tmp_success) = 0;
+          id(wf_tmp_failed)  = 0;
+          id(wf_cursor)      = 0;
+          ESP_LOGI("github", "workflow_runs sweep: %d active repo(s)",
+                   (int) top_names.size());
+      - while:
+          condition:
+            lambda: 'return id(wf_cursor) < (int) id(active_repo_names).size();'
+          then:
+            - http_request.get:
+                url: !lambda 'return std::string("https://api.github.com/repos/") + id(active_repo_names)[id(wf_cursor)] + "/actions/runs?per_page=5";'
+                max_response_buffer_size: 16384
+                request_headers:
+                  Authorization: "Bearer ${github_token}"
+                  Accept: "application/vnd.github+json"
+                  X-GitHub-Api-Version: "2022-11-28"
+                capture_response: true
+                on_error:
+                  then:
+                    - logger.log:
+                        format: "workflow_runs fetch errored for active repo %d"
+                        args: ['id(wf_cursor)']
+                        level: WARN
+                        tag: "github"
+                on_response:
+                  then:
+                    - lambda: |-
+                        if (response->status_code != 200) {
+                          ESP_LOGW("github", "workflow_runs HTTP %d for %s",
+                                   response->status_code,
+                                   id(active_repo_names)[id(wf_cursor)].c_str());
+                          return;
+                        }
+                        JsonDocument filter;
+                        filter["workflow_runs"][0]["status"] = true;
+                        filter["workflow_runs"][0]["conclusion"] = true;
+                        JsonDocument doc;
+                        DeserializationError err = deserializeJson(
+                            doc, body, DeserializationOption::Filter(filter));
+                        if (err) {
+                          ESP_LOGW("github", "workflow_runs parse failed for %s: %s",
+                                   id(active_repo_names)[id(wf_cursor)].c_str(),
+                                   err.c_str());
+                          return;
+                        }
+                        JsonArray runs = doc["workflow_runs"].as<JsonArray>();
+                        if (runs.isNull()) return;
+                        int r = 0, s = 0, f = 0;
+                        for (JsonObject run : runs) {
+                          std::string status = run["status"] | "";
+                          std::string concl  = run["conclusion"] | "";
+                          if (status == "completed") {
+                            if      (concl == "success")  s++;
+                            else if (concl == "failure")  f++;
+                          } else {
+                            // queued / in_progress / pending / waiting
+                            r++;
+                          }
+                        }
+                        id(wf_tmp_running) += r;
+                        id(wf_tmp_success) += s;
+                        id(wf_tmp_failed)  += f;
+                        ESP_LOGI("github", "  %s: run=%d ok=%d fail=%d",
+                                 id(active_repo_names)[id(wf_cursor)].c_str(),
+                                 r, s, f);
+            # Space the per-repo requests out so we don't stack TLS
+            # handshakes tight enough to starve the scheduler on a
+            # busy board.
+            - delay: 750ms
+            - lambda: 'id(wf_cursor) += 1;'
+      - lambda: |-
+          id(ci_running) = id(wf_tmp_running);
+          id(ci_success) = id(wf_tmp_success);
+          id(ci_failed)  = id(wf_tmp_failed);
+          ESP_LOGI("github", "workflow_runs aggregate: run=%d ok=%d fail=%d",
+                   id(ci_running), id(ci_success), id(ci_failed));
+
   # Copilot usage for the authenticated user. Pulls the current billing
   # cycle's usage items and sums anything where product == "Copilot".
   # Requires a fine-grained PAT with "Plan: read-only" (billing) access.
@@ -444,39 +622,34 @@
                   ESP_LOGI("github", "copilot usage: qty=%.2f net=%.2f sku=%s",
                            qty, net, primary_sku.c_str());
 
-  # GraphQL: contributions (commits/PRs/reviews/issues) for today, this
-  # week and this year, plus PR counts via aliased search. A single
-  # request returns everything we need for the Contributions and PRs
-  # cards. Private repos are counted only if the token has Contents:RO
-  # on them AND "Include private contributions on my profile" is on.
+  # GraphQL (part 1 of 2): contributions (commits/PRs/reviews/issues)
+  # for today, this week and this year. Small and fast (~300-500ms).
+  # On success it chains into fetch_stats_search to pick up the
+  # Elasticsearch-backed search() counts separately - doing all 9
+  # operations in one request was taking 4+ seconds and tripping the
+  # task watchdog.
   - id: fetch_stats_graphql
     mode: restart
     then:
       - http_request.post:
           url: "https://api.github.com/graphql"
-          max_response_buffer_size: 20480
+          max_response_buffer_size: 8192
           request_headers:
             Authorization: "Bearer ${github_token}"
             Accept: "application/vnd.github+json"
             Content-Type: "application/json"
-          # The GraphQL query uses variables $user, $dayStart, $weekStart,
-          # $yearStart. Dates are injected at request time as UTC ISO8601
-          # midnight. We let the device's current time drive the windows.
           body: !lambda |-
             auto pad2 = [](int v) {
               char b[4]; snprintf(b, sizeof(b), "%02d", v); return std::string(b);
             };
             auto now = id(sntp_time).now();
             std::string day_start, week_start, year_start;
-            std::string merged_week, open_q, review_q;
-            std::string issues_assigned_q, issues_authored_q, issues_closed_q;
             if (now.is_valid()) {
               char ybuf[8]; snprintf(ybuf, sizeof(ybuf), "%04d", now.year);
               day_start  = std::string(ybuf) + "-" + pad2(now.month) + "-" + pad2(now.day_of_month) + "T00:00:00Z";
               // Week starts Monday (UTC)
               int dow = now.day_of_week;  // 1=Sun..7=Sat (ESPHome convention)
               int back = (dow == 1) ? 6 : (dow - 2);
-              // Subtract `back` days by working in epoch seconds
               time_t t = now.timestamp - (back * 86400) -
                          (now.hour * 3600 + now.minute * 60 + now.second);
               struct tm wt; gmtime_r(&t, &wt);
@@ -484,63 +657,34 @@
                                     wt.tm_year + 1900, wt.tm_mon + 1, wt.tm_mday);
               week_start = wb;
               year_start = std::string(ybuf) + "-01-01T00:00:00Z";
-              // Also compute a YYYY-MM-DD for search (merged:>= / closed:>=)
-              char mb[16]; snprintf(mb, sizeof(mb), "%04d-%02d-%02d",
-                                    wt.tm_year + 1900, wt.tm_mon + 1, wt.tm_mday);
-              merged_week = std::string("is:pr author:") + "${github_user}" +
-                            " is:merged merged:>=" + mb;
-              issues_closed_q = std::string("is:issue author:") + "${github_user}" +
-                                " is:closed closed:>=" + mb;
             } else {
-              // No clock yet - fall back to the start of the Unix year.
-              // GraphQL will still accept the window; counts will just be
-              // "since boot with no clock" which is fine as a once-off.
               day_start = "2026-01-01T00:00:00Z";
               week_start = "2026-01-01T00:00:00Z";
               year_start = "2026-01-01T00:00:00Z";
-              merged_week = std::string("is:pr author:") + "${github_user}" + " is:merged";
-              issues_closed_q = std::string("is:issue author:") + "${github_user}" + " is:closed";
             }
-            open_q  = std::string("is:pr author:") + "${github_user}" + " is:open";
-            review_q = std::string("is:pr review-requested:") + "${github_user}" + " is:open";
-            issues_assigned_q = std::string("is:issue assignee:") + "${github_user}" + " is:open";
-            issues_authored_q = std::string("is:issue author:") + "${github_user}" + " is:open";
 
             // Use `viewer` rather than `user(login:...)` so we see the
             // token owner's full contribution data (private + org repos
             // the token can see), regardless of the "Include private
-            // contributions on my profile" setting. search() queries
-            // still use `author:${github_user}` which is fine.
+            // contributions on my profile" setting.
+            // Note: \044 is octal for '$' — keeps the literal '$' out of the
+            // YAML source so ESPHome's substitution parser doesn't warn about
+            // "undefined variable" for GraphQL query variables.
             std::string q =
-              "query($dayStart:DateTime!, $weekStart:DateTime!, $yearStart:DateTime!, $mergedWeek:String!, $openQ:String!, $reviewQ:String!, $issuesAssignedQ:String!, $issuesAuthoredQ:String!, $issuesClosedQ:String!) {"
-              "  today: viewer{ contributionsCollection(from:$dayStart){ totalCommitContributions totalPullRequestContributions totalPullRequestReviewContributions totalIssueContributions } }"
-              "  week:  viewer{ contributionsCollection(from:$weekStart){ totalCommitContributions totalPullRequestContributions totalPullRequestReviewContributions totalIssueContributions } }"
-              "  year:  viewer{ contributionsCollection(from:$yearStart){ totalCommitContributions totalPullRequestContributions } }"
-              "  merged:         search(query:$mergedWeek,        type:ISSUE){ issueCount }"
-              "  open:           search(query:$openQ,             type:ISSUE){ issueCount }"
-              "  review:         search(query:$reviewQ,           type:ISSUE){ issueCount }"
-              "  issuesAssigned: search(query:$issuesAssignedQ,   type:ISSUE){ issueCount }"
-              "  issuesAuthored: search(query:$issuesAuthoredQ,   type:ISSUE){ issueCount }"
-              "  issuesClosed:   search(query:$issuesClosedQ,     type:ISSUE){ issueCount }"
+              "query(\044dayStart:DateTime!, \044weekStart:DateTime!, \044yearStart:DateTime!) {"
+              "  today: viewer{ contributionsCollection(from:\044dayStart){ totalCommitContributions totalPullRequestContributions totalPullRequestReviewContributions totalIssueContributions } }"
+              "  week:  viewer{ contributionsCollection(from:\044weekStart){ totalCommitContributions totalPullRequestContributions totalPullRequestReviewContributions totalIssueContributions } }"
+              "  year:  viewer{ contributionsCollection(from:\044yearStart){ totalCommitContributions totalPullRequestContributions } }"
               "}";
 
-            // Manual JSON build (avoids a second parse). Values are user
-            // names and ISO dates so no escaping needed.
             std::string body;
-            body.reserve(1536);
+            body.reserve(1024);
             body += "{\"query\":\"";
-            // Escape the quotes in q
             for (char c : q) { if (c == '"') body += "\\\""; else body += c; }
             body += "\",\"variables\":{";
             body += "\"dayStart\":\"" + day_start + "\",";
             body += "\"weekStart\":\"" + week_start + "\",";
-            body += "\"yearStart\":\"" + year_start + "\",";
-            body += "\"mergedWeek\":\"" + merged_week + "\",";
-            body += "\"openQ\":\"" + open_q + "\",";
-            body += "\"reviewQ\":\"" + review_q + "\",";
-            body += "\"issuesAssignedQ\":\"" + issues_assigned_q + "\",";
-            body += "\"issuesAuthoredQ\":\"" + issues_authored_q + "\",";
-            body += "\"issuesClosedQ\":\""   + issues_closed_q   + "\"";
+            body += "\"yearStart\":\"" + year_start + "\"";
             body += "}}";
             return body;
           capture_response: true
@@ -587,12 +731,6 @@
                   filter["data"]["week"]["contributionsCollection"]["totalIssueContributions"] = true;
                   filter["data"]["year"]["contributionsCollection"]["totalCommitContributions"] = true;
                   filter["data"]["year"]["contributionsCollection"]["totalPullRequestContributions"] = true;
-                  filter["data"]["merged"]["issueCount"] = true;
-                  filter["data"]["open"]["issueCount"] = true;
-                  filter["data"]["review"]["issueCount"] = true;
-                  filter["data"]["issuesAssigned"]["issueCount"] = true;
-                  filter["data"]["issuesAuthored"]["issueCount"] = true;
-                  filter["data"]["issuesClosed"]["issueCount"] = true;
 
                   JsonDocument doc;
                   DeserializationError err = deserializeJson(doc, body,
@@ -613,6 +751,114 @@
                   id(prs_year)     = y["totalPullRequestContributions"] | 0;
                   id(reviews_week) = w["totalPullRequestReviewContributions"] | 0;
                   id(issues_week)  = w["totalIssueContributions"] | 0;
+
+                  id(stats_ok) = true;
+                  ESP_LOGI("github",
+                           "stats contrib: c(d/w/y)=%d/%d/%d prs(d/w/y)=%d/%d/%d reviews_wk=%d issues_wk=%d",
+                           id(commits_today), id(commits_week), id(commits_year),
+                           id(prs_today), id(prs_week), id(prs_year),
+                           id(reviews_week), id(issues_week));
+              # Chain the search aggregate. 2s gap lets the network
+              # stack breathe and the display interval catch up.
+              - delay: 2s
+              - script.execute: fetch_stats_search
+
+  # GraphQL (part 2 of 2): the six search() aliases (open/merged PRs,
+  # review-requested PRs, assigned/authored/closed issues). Split out
+  # from fetch_stats_graphql because search() is ES-backed on GitHub's
+  # side and multiple of them in one doc add up to several seconds.
+  - id: fetch_stats_search
+    mode: restart
+    then:
+      - http_request.post:
+          url: "https://api.github.com/graphql"
+          max_response_buffer_size: 8192
+          request_headers:
+            Authorization: "Bearer ${github_token}"
+            Accept: "application/vnd.github+json"
+            Content-Type: "application/json"
+          body: !lambda |-
+            auto pad2 = [](int v) {
+              char b[4]; snprintf(b, sizeof(b), "%02d", v); return std::string(b);
+            };
+            auto now = id(sntp_time).now();
+            std::string merged_week, open_q, review_q;
+            std::string issues_assigned_q, issues_authored_q, issues_closed_q;
+            if (now.is_valid()) {
+              int dow = now.day_of_week;  // 1=Sun..7=Sat
+              int back = (dow == 1) ? 6 : (dow - 2);
+              time_t t = now.timestamp - (back * 86400) -
+                         (now.hour * 3600 + now.minute * 60 + now.second);
+              struct tm wt; gmtime_r(&t, &wt);
+              char mb[16]; snprintf(mb, sizeof(mb), "%04d-%02d-%02d",
+                                    wt.tm_year + 1900, wt.tm_mon + 1, wt.tm_mday);
+              merged_week = std::string("is:pr author:") + "${github_user}" +
+                            " is:merged merged:>=" + mb;
+              issues_closed_q = std::string("is:issue author:") + "${github_user}" +
+                                " is:closed closed:>=" + mb;
+            } else {
+              merged_week = std::string("is:pr author:") + "${github_user}" + " is:merged";
+              issues_closed_q = std::string("is:issue author:") + "${github_user}" + " is:closed";
+            }
+            open_q  = std::string("is:pr author:") + "${github_user}" + " is:open";
+            review_q = std::string("is:pr review-requested:") + "${github_user}" + " is:open";
+            issues_assigned_q = std::string("is:issue assignee:") + "${github_user}" + " is:open";
+            issues_authored_q = std::string("is:issue author:") + "${github_user}" + " is:open";
+
+            // Note: \044 is octal for '$' — keeps the literal '$' out of the YAML
+            // source so ESPHome's substitution parser doesn't warn.
+            std::string q =
+              "query(\044mergedWeek:String!, \044openQ:String!, \044reviewQ:String!, \044issuesAssignedQ:String!, \044issuesAuthoredQ:String!, \044issuesClosedQ:String!) {"
+              "  merged:         search(query:\044mergedWeek,        type:ISSUE){ issueCount }"
+              "  open:           search(query:\044openQ,             type:ISSUE){ issueCount }"
+              "  review:         search(query:\044reviewQ,           type:ISSUE){ issueCount }"
+              "  issuesAssigned: search(query:\044issuesAssignedQ,   type:ISSUE){ issueCount }"
+              "  issuesAuthored: search(query:\044issuesAuthoredQ,   type:ISSUE){ issueCount }"
+              "  issuesClosed:   search(query:\044issuesClosedQ,     type:ISSUE){ issueCount }"
+              "}";
+
+            std::string body;
+            body.reserve(1536);
+            body += "{\"query\":\"";
+            for (char c : q) { if (c == '"') body += "\\\""; else body += c; }
+            body += "\",\"variables\":{";
+            body += "\"mergedWeek\":\"" + merged_week + "\",";
+            body += "\"openQ\":\"" + open_q + "\",";
+            body += "\"reviewQ\":\"" + review_q + "\",";
+            body += "\"issuesAssignedQ\":\"" + issues_assigned_q + "\",";
+            body += "\"issuesAuthoredQ\":\"" + issues_authored_q + "\",";
+            body += "\"issuesClosedQ\":\""   + issues_closed_q   + "\"";
+            body += "}}";
+            return body;
+          capture_response: true
+          on_error:
+            - logger.log:
+                format: "stats search fetch failed, will retry next cycle"
+                level: WARN
+                tag: "github"
+          on_response:
+            then:
+              - lambda: |-
+                  int sc = response->status_code;
+                  if (sc != 200) {
+                    ESP_LOGW("github", "stats search HTTP %d", sc);
+                    return;
+                  }
+                  JsonDocument filter;
+                  filter["data"]["merged"]["issueCount"] = true;
+                  filter["data"]["open"]["issueCount"] = true;
+                  filter["data"]["review"]["issueCount"] = true;
+                  filter["data"]["issuesAssigned"]["issueCount"] = true;
+                  filter["data"]["issuesAuthored"]["issueCount"] = true;
+                  filter["data"]["issuesClosed"]["issueCount"] = true;
+
+                  JsonDocument doc;
+                  DeserializationError err = deserializeJson(doc, body,
+                      DeserializationOption::Filter(filter));
+                  if (err) {
+                    ESP_LOGW("github", "stats search parse failed: %s", err.c_str());
+                    return;
+                  }
                   id(prs_open)            = doc["data"]["open"]["issueCount"] | 0;
                   id(prs_merged_week)     = doc["data"]["merged"]["issueCount"] | 0;
                   id(prs_review_requested)= doc["data"]["review"]["issueCount"] | 0;
@@ -620,14 +866,9 @@
                   id(issues_authored_open) = doc["data"]["issuesAuthored"]["issueCount"] | 0;
                   id(issues_closed_week)   = doc["data"]["issuesClosed"]["issueCount"] | 0;
 
-                  id(stats_ok) = true;
                   ESP_LOGI("github",
-                           "stats: c(d/w/y)=%d/%d/%d prs(d/w/y)=%d/%d/%d open=%d merged=%d review=%d",
-                           id(commits_today), id(commits_week), id(commits_year),
-                           id(prs_today), id(prs_week), id(prs_year),
-                           id(prs_open), id(prs_merged_week), id(prs_review_requested));
-                  ESP_LOGI("github",
-                           "stats: issues(assigned/authored/closed_wk)=%d/%d/%d",
+                           "stats search: open=%d merged=%d review=%d issues(assigned/authored/closed_wk)=%d/%d/%d",
+                           id(prs_open), id(prs_merged_week), id(prs_review_requested),
                            id(issues_assigned_open), id(issues_authored_open), id(issues_closed_week));
 
   # Calendar fetch - split from the main stats query because carrying
