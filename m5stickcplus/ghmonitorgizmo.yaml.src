@@ -37,6 +37,13 @@ substitutions:
   # events tally on means the globals still reflect something
   # sensible if you ever enable the UI in a fork.
   workflow_runs_enabled: "false"
+  # parity: matches m5sticks3/ghmonitorgizmo-s3.yaml.src
+  # common/scripts.yaml compiles ${active_repo_window_minutes} and
+  # ${active_repo_cap} into fetch_workflow_runs lambdas on BOTH devices
+  # (ESPHome expands substitutions at build time regardless of whether
+  # workflow_runs_enabled is false). Without these the Plus build fails.
+  active_repo_window_minutes: "240"
+  active_repo_cap: "8"
 
   # --- Live-debug toggles ---
   # Shared script fragments use these on both devices so the S3 can be
