@@ -359,12 +359,10 @@
                   }
                   if (!new_top.empty()) id(last_top_event_id) = new_top;
 
-                  // Reverse so the oldest new event shows first
-                  std::reverse(new_lines.begin(), new_lines.end());
-                  std::reverse(new_detail.begin(), new_detail.end());
-                  std::reverse(new_copilot.begin(), new_copilot.end());
-                  std::reverse(new_ci_fail.begin(), new_ci_fail.end());
-
+                  // new_lines is already in created_at desc order (newest first)
+                  // because order[] was sorted by created_at desc above.
+                  // carousel_idx starts at 0 and advances, so slide 0 is the
+                  // newest event — exactly the desired display order.
                   if (!new_lines.empty()) {
                     id(carousel_lines) = new_lines;
                     id(carousel_detail) = new_detail;
@@ -1239,9 +1237,12 @@
                   int sc = response->status_code;
                   if (sc != 200) {
                     ESP_LOGW("github", "dependabot HTTP %d", sc);
-                    if (sc == 401 || sc == 403 || sc == 404) {
+                    // 404 here is expected when the user has zero open alerts visible
+                    // (the /user/dependabot/alerts endpoint returns 404 instead of [] in that case).
+                    // Treat it as transient: just skip this cycle and retry on the next interval.
+                    if (sc == 401 || sc == 403) {
                       id(dependabot_disabled) = true;
-                      ESP_LOGW("github", "dependabot disabled until reboot (token missing security_events?)");
+                      ESP_LOGW("github", "dependabot disabled until reboot (token missing repo scope?)");
                     }
                     return;
                   }

@@ -41,4 +41,10 @@ time:
     servers:
       - "pool.ntp.org"
       - "time.cloudflare.com"
+    # Immediately correct screen state once SNTP first syncs, so a device
+    # that boots inside the night window doesn't leave the screen on for
+    # up to 30 s waiting for the polling interval.
+    on_time_sync:
+      then:
+        - script.execute: apply_screen_power
 

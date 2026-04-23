@@ -278,7 +278,7 @@ globals:
     restore_value: no
     initial_value: '0'
 
-  # Carousel queue of new events since last fetch (oldest first)
+  # Carousel queue of new events since last fetch (newest first)
   - id: carousel_lines
     type: std::vector<std::string>
     restore_value: no
