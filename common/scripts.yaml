@@ -708,7 +708,16 @@
               char wb[24]; snprintf(wb, sizeof(wb), "%04d-%02d-%02dT00:00:00Z",
                                     wt.tm_year + 1900, wt.tm_mon + 1, wt.tm_mday);
               week_start = wb;
-              year_start = std::string(ybuf) + "-01-01T00:00:00Z";
+              // Rolling 12-month window: same as fetch_cal_graphql's default
+              // contributionsCollection window so the YEAR column in the
+              // stats table matches the period covered by the heatmap/sparkline.
+              // (Previously this was YYYY-01-01, i.e. calendar-YTD only, which
+              // diverged from the heatmap after any January 1st.)
+              time_t yr_t = now.timestamp - (365 * 86400);
+              struct tm yrt; gmtime_r(&yr_t, &yrt);
+              char yrb[24]; snprintf(yrb, sizeof(yrb), "%04d-%02d-%02dT00:00:00Z",
+                                    yrt.tm_year + 1900, yrt.tm_mon + 1, yrt.tm_mday);
+              year_start = yrb;
             } else {
               day_start = "2026-01-01T00:00:00Z";
               week_start = "2026-01-01T00:00:00Z";
