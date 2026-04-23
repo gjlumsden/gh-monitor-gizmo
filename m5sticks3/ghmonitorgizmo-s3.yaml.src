@@ -25,7 +25,7 @@ substitutions:
   # Master switch for ALL chimes (boot, event, card, ping, fail).
   # Set to "false" to silence the device entirely — useful for
   # isolating audio-stack power draw as a crash trigger.
-  beeps_enabled: "false"
+  beeps_enabled: "true"
 
   # --- CI (GitHub Actions) ---
   # When true the top-bar CI counters (running/ok/fail) and the CI
