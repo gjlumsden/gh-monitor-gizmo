@@ -1,0 +1,4 @@
+# Stub: this variant does NOT enable the Bluetooth proxy. The
+# `# !include_variant bluetooth_proxy.yaml` directive in the S3 src
+# resolves to this file (i.e. nothing) for non-btproxy builds. See
+# common/variants/ha-btproxy/bluetooth_proxy.yaml for the real fragment.

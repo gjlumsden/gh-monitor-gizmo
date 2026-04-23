@@ -44,6 +44,7 @@ DEVICES: list[tuple[str, str, str]] = [
     ("m5stickcplus/ghmonitorgizmo.yaml.src", "dist/ghmonitorgizmo-cplus-standalone.yaml", "standalone"),
     ("m5sticks3/ghmonitorgizmo-s3.yaml.src", "dist/ghmonitorgizmo-s3-ha.yaml",            "ha"),
     ("m5sticks3/ghmonitorgizmo-s3.yaml.src", "dist/ghmonitorgizmo-s3-standalone.yaml",    "standalone"),
+    ("m5sticks3/ghmonitorgizmo-s3.yaml.src", "dist/ghmonitorgizmo-s3-ha-btproxy.yaml",    "ha-btproxy"),
 ]
 
 
@@ -101,7 +102,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--variant",
         default="ha",
-        choices=["ha", "standalone"],
+        choices=["ha", "standalone", "ha-btproxy"],
         help="variant to build when a single source is given (default: ha)",
     )
     args = ap.parse_args(argv)

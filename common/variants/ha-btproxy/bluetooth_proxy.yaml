@@ -1,0 +1,17 @@
+# Bluetooth proxy fragment — ONLY included by the `ha-btproxy` build
+# variant (see build.py DEVICES). The `ha` and `standalone` variants
+# ship a stub bluetooth_proxy.yaml that is just this header comment, so
+# the `# !include_variant bluetooth_proxy.yaml` directive in the S3 src
+# resolves to nothing for non-btproxy builds.
+#
+# Forwards all in-range BLE advertisements (and, with `active: true`,
+# GATT connections) to Home Assistant over the native ESPHome API.
+# Docs: https://esphome.io/components/bluetooth_proxy.html
+esp32_ble_tracker:
+  scan_parameters:
+    interval: 1100ms
+    window: 1100ms
+    active: true
+
+bluetooth_proxy:
+  active: true

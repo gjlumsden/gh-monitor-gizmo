@@ -1,0 +1,4 @@
+# Stub: standalone variant has no HA API and therefore no use for a
+# Bluetooth proxy. The `# !include_variant bluetooth_proxy.yaml`
+# directive in the S3 src resolves to this file (i.e. nothing) for
+# the standalone build.

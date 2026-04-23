@@ -55,6 +55,16 @@ substitutions:
   http_buffer_rx_size: "12288"
   http_buffer_tx_size: "1024"
 
+  # --- Bluetooth proxy ---
+  # Set to "true" automatically by the `ha-btproxy` build variant
+  # (see build.py DEVICES). Do NOT flip this manually: the actual
+  # `esp32_ble_tracker:` / `bluetooth_proxy:` YAML blocks are only
+  # injected via `# !include_variant bluetooth_proxy.yaml` when
+  # build.py is run with variant=ha-btproxy, so toggling this on its
+  # own here has no effect. Use `python build.py` to produce
+  # `dist/ghmonitorgizmo-s3-ha-btproxy.yaml` instead.
+  bluetooth_proxy_enabled: "false"
+
   # --- Screen protection ---
   # Fractional backlight brightness 0.0 - 1.0. The S3 drives the LCD
   # backlight with a real PWM on GPIO38, so reducing this value dims the
@@ -216,6 +226,7 @@ psram:
 
 # !include ../common/network.yaml
 # !include_variant api.yaml
+# !include_variant bluetooth_proxy.yaml
 i2c:
   # Internal I2C bus shared by the M5PM1 PMIC (0x6e), BMI270 IMU (0x68)
   # and ES8311 audio codec (0x18). The Grove / Port.A bus is separate
