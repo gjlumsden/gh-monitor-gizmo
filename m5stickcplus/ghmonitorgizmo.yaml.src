@@ -38,6 +38,20 @@ substitutions:
   # sensible if you ever enable the UI in a fork.
   workflow_runs_enabled: "false"
 
+  # --- Live-debug toggles ---
+  # Shared script fragments use these on both devices so the S3 can be
+  # A/B tested without carrying device-specific branches in common/.
+  debug_mem_logs_enabled: "false"
+  user_events_enabled: "true"
+  copilot_usage_enabled: "true"
+  stats_enabled: "true"
+  stats_search_enabled: "true"
+  calendar_enabled: "true"
+  rate_limit_enabled: "true"
+  dependabot_enabled: "true"
+  http_buffer_rx_size: "12288"
+  http_buffer_tx_size: "1024"
+
   # --- Screen protection ---
   # Fractional backlight brightness 0.0 - 1.0. Only honoured on the
   # M5Stick S3 firmware (PWM on GPIO38). On this Plus 1.1 firmware the
@@ -198,7 +212,7 @@ script:
     then:
       - if:
           condition:
-            lambda: 'return ${beeps_enabled};'
+            lambda: 'return ${beeps_enabled} && !id(screen_asleep);'
           then:
             - rtttl.play: "blip:d=32,o=6,b=300:c"
   - id: play_beep_fail
@@ -206,7 +220,7 @@ script:
     then:
       - if:
           condition:
-            lambda: 'return ${beeps_enabled};'
+            lambda: 'return ${beeps_enabled} && !id(screen_asleep);'
           then:
             - rtttl.play: "fail:d=8,o=5,b=220:e,c,a4,p"
   - id: play_beep_ping
@@ -214,7 +228,7 @@ script:
     then:
       - if:
           condition:
-            lambda: 'return ${beeps_enabled};'
+            lambda: 'return ${beeps_enabled} && !id(screen_asleep);'
           then:
             - rtttl.play: "ping:d=16,o=6,b=300:e,g"
 

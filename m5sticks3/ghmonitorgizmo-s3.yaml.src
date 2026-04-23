@@ -7,8 +7,8 @@ substitutions:
   # Screen (backlight) is turned off between sleep_start_hour and
   # sleep_end_hour, local time. Button A wakes the screen for 15 s.
   # Set both values to the same number (e.g. 0) to disable night mode.
-  sleep_start_hour: "20"   # off at 20:00
-  sleep_end_hour:   "8"    # on  at 08:00
+  sleep_start_hour: "19"   # off at 19:00
+  sleep_end_hour:   "9"    # on  at 09:00
   # IANA timezone for the local-hour comparison above. Examples:
   #   "Europe/London"  "America/New_York"  "Asia/Tokyo"
   timezone: "Europe/London"
@@ -37,6 +37,23 @@ substitutions:
   workflow_runs_enabled: "true"
   active_repo_window_minutes: "240"
   active_repo_cap: "8"
+
+  # --- Feature gates ---
+  # Per-fetch feature toggles. Flip individually to "false" to isolate a
+  # misbehaving fetch (e.g. when bisecting a crash or rate-limit issue)
+  # without editing the shared scripts/intervals fragments.
+  # `debug_mem_logs_enabled` adds heap/internal-SRAM/PSRAM trace lines
+  # around each fetch; leave off in normal use.
+  debug_mem_logs_enabled: "false"
+  user_events_enabled: "true"
+  copilot_usage_enabled: "true"
+  stats_enabled: "true"
+  stats_search_enabled: "true"
+  calendar_enabled: "true"
+  rate_limit_enabled: "true"
+  dependabot_enabled: "true"
+  http_buffer_rx_size: "12288"
+  http_buffer_tx_size: "1024"
 
   # --- Screen protection ---
   # Fractional backlight brightness 0.0 - 1.0. The S3 drives the LCD
@@ -163,7 +180,7 @@ esphome:
       # Quick boot chime so it's obvious the audio chain is alive.
       - if:
           condition:
-            lambda: 'return ${beeps_enabled};'
+            lambda: 'return ${beeps_enabled} && !id(screen_asleep);'
           then:
             - delay: 500ms
             - rtttl.play: "boot:d=8,o=6,b=220:c,e,g"
@@ -336,7 +353,7 @@ script:
     then:
       - if:
           condition:
-            lambda: 'return ${beeps_enabled};'
+            lambda: 'return ${beeps_enabled} && !id(screen_asleep);'
           then:
             - rtttl.play: "blip:d=8,o=6,b=220:g,e"
   - id: play_beep_fail
@@ -344,7 +361,7 @@ script:
     then:
       - if:
           condition:
-            lambda: 'return ${beeps_enabled};'
+            lambda: 'return ${beeps_enabled} && !id(screen_asleep);'
           then:
             - rtttl.play: "fail:d=8,o=5,b=220:e,c,a4,p"
   - id: play_beep_ping
@@ -352,7 +369,7 @@ script:
     then:
       - if:
           condition:
-            lambda: 'return ${beeps_enabled};'
+            lambda: 'return ${beeps_enabled} && !id(screen_asleep);'
           then:
             - rtttl.play: "ping:d=16,o=6,b=300:e,g"
 

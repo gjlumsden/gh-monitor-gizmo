@@ -163,7 +163,9 @@ interval:
     then:
       - if:
           condition:
-            wifi.connected:
+            and:
+              - wifi.connected:
+              - lambda: 'return ${user_events_enabled};'
           then:
             - lambda: 'id(user_retry_pending) = false;'
             - script.execute: fetch_user_events
@@ -192,6 +194,7 @@ interval:
           condition:
             and:
               - wifi.connected:
+              - lambda: 'return ${copilot_usage_enabled};'
               - lambda: 'return !id(copilot_disabled);'
               - lambda: 'return id(idle_ui_active);'
           then:
@@ -205,6 +208,7 @@ interval:
           condition:
             and:
               - wifi.connected:
+              - lambda: 'return ${stats_enabled};'
               - lambda: 'return !id(stats_disabled);'
               - lambda: 'return id(idle_ui_active);'
           then:
@@ -218,6 +222,7 @@ interval:
           condition:
             and:
               - wifi.connected:
+              - lambda: 'return ${calendar_enabled};'
               - lambda: 'return id(idle_ui_active);'
           then:
             - lambda: 'id(cal_retry_pending) = false;'
@@ -230,6 +235,7 @@ interval:
           condition:
             and:
               - wifi.connected:
+              - lambda: 'return ${rate_limit_enabled};'
               - lambda: 'return id(idle_ui_active);'
           then:
             - lambda: 'id(ratelimit_retry_pending) = false;'
@@ -242,11 +248,12 @@ interval:
           condition:
             and:
               - wifi.connected:
+              - lambda: 'return ${dependabot_enabled};'
               - lambda: 'return !id(dependabot_disabled);'
               - lambda: 'return id(idle_ui_active);'
           then:
             - lambda: 'id(dependabot_retry_pending) = false;'
-            - script.execute: fetch_dependabot_graphql
+            - script.execute: fetch_dependabot_alerts
 
   # Recompute night-mode state every 30 s. apply_screen_power also
   # runs on button press and on boot to sync backlight with state.

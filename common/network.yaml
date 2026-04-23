@@ -29,8 +29,8 @@ http_request:
   timeout: 15s
   verify_ssl: false
   follow_redirects: true
-  buffer_size_rx: 12288
-  buffer_size_tx: 1024
+  buffer_size_rx: ${http_buffer_rx_size}
+  buffer_size_tx: ${http_buffer_tx_size}
 
 # Time: used for the rate-limit reset countdown. SNTP is fire-and-forget;
 # if the network is down the card just hides the countdown.
