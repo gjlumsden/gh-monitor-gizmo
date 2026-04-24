@@ -66,17 +66,26 @@ jobs:
 
       - name: Verify build is idempotent
         run: |
+          # dist/ is git-ignored, so `git diff` cannot see it. Snapshot
+          # the first build, rerun, and diff the two directories. Any
+          # drift (content, added, or removed files) fails the check.
+          cp -r dist dist-first
           python build.py
-          git diff --exit-code -- dist/ || {
+          diff -ruN dist-first dist || {
             echo 'build.py is not idempotent - dist/ differs between runs';
             exit 1;
           }
+          rm -rf dist-first
 
       - name: Sanity-check dist/
         run: |
+          # Expected count is data-driven from the DEVICES list in
+          # build.py, so adding a variant there is the only edit
+          # required to keep this check honest.
+          expected=$(grep -c '\.yaml\.src",' build.py)
           count=$(ls dist/*.yaml | wc -l)
-          if [ "$count" -ne 4 ]; then
-            echo "expected 4 YAML files in dist/, found $count"
+          if [ "$count" -ne "$expected" ]; then
+            echo "expected $expected YAML files in dist/ (per build.py DEVICES), found $count"
             ls -l dist/
             exit 1
           fi
@@ -117,10 +126,10 @@ jobs:
             Pick the YAML file matching **your hardware** *and* **your
             install path**, then follow the matching guide below.
 
-            |                      | Home Assistant (native API)            | Standalone (built-in web UI)                  |
-            |----------------------|----------------------------------------|-----------------------------------------------|
-            | **M5StickC Plus 1.1**| `ghmonitorgizmo-cplus-ha.yaml`         | `ghmonitorgizmo-cplus-standalone.yaml`        |
-            | **M5Stick S3 (K150)**| `ghmonitorgizmo-s3-ha.yaml`            | `ghmonitorgizmo-s3-standalone.yaml`           |
+            |                      | Home Assistant (native API)            | Standalone (built-in web UI)                  | Home Assistant + BT Proxy                     |
+            |----------------------|----------------------------------------|-----------------------------------------------|-----------------------------------------------|
+            | **M5StickC Plus 1.1**| `ghmonitorgizmo-cplus-ha.yaml`         | `ghmonitorgizmo-cplus-standalone.yaml`        | _not supported_                               |
+            | **M5Stick S3 (K150)**| `ghmonitorgizmo-s3-ha.yaml`            | `ghmonitorgizmo-s3-standalone.yaml`           | `ghmonitorgizmo-s3-ha-btproxy.yaml`           |
 
             Install guides:
 
