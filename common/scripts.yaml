@@ -10,8 +10,14 @@
                      (unsigned) heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
           }
       - http_request.get:
-          url: "https://api.github.com/users/${github_user}/events?per_page=10"
-          max_response_buffer_size: 32768
+          # per_page=8 + 40 KB buffer: PushEvents with many commits can balloon
+          # to 8-10 KB each, so 10 events occasionally exceeded the old 32 KB
+          # cap and ArduinoJson returned IncompleteInput. Belt-and-braces: trim
+          # per_page to 8 (carousel only renders the top ~5 anyway) AND raise
+          # the buffer to 40 KB. S3 has 8+ MB PSRAM free; Plus transient cost
+          # is ~8 KB extra DRAM for the duration of the fetch.
+          url: "https://api.github.com/users/${github_user}/events?per_page=8"
+          max_response_buffer_size: 40960
           request_headers:
             Authorization: "Bearer ${github_token}"
             Accept: "application/vnd.github+json"

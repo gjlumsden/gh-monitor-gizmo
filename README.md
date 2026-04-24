@@ -387,8 +387,10 @@ See [`secrets.yaml.example`](secrets.yaml.example) for the template.
 - **`HTTP_CLIENT: Allocation failed`** – heap fragmentation. Reduce
   `buffer_size_rx` and `max_response_buffer_size` in `http_request:`,
   or reduce `per_page=` in the URL.
-- **`user json parse failed: IncompleteInput`** – `max_response_buffer_size`
-  is smaller than the response body. Raise it (currently 12 288).
+- **`user json parse failed: IncompleteInput`** – response body exceeded
+  `max_response_buffer_size` (currently 40 960 for `/users/.../events`).
+  First lever is `per_page=` on the events URL (currently 8); raise the
+  buffer only if trimming `per_page` isn't enough.
 - **`interval took a long time (>1 s)`** – usually the JSON parse on
   the 8 KB response. Harmless log noise.
 - **Nothing shown after boot** – the device waits 30 s for Wi-Fi, then
