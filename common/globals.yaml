@@ -295,6 +295,25 @@ globals:
   - id: wf_cache_fail
     type: std::map<std::string, int>
     restore_value: no
+  # Per-repo set of workflow_run ids we've already emitted as carousel
+  # slides, so the same completed run isn't surfaced twice across sweeps.
+  # Seeded on first sight of a repo (to avoid spamming stale boot-time
+  # completions) and pruned to only hold ids currently visible in the
+  # per_page=3 response window.
+  - id: wf_emitted_ids
+    type: std::map<std::string, std::vector<long long>>
+    restore_value: no
+  # Pending wf-run carousel slides accumulated during a sweep; appended
+  # to the carousel_* vectors once the sweep loop completes.
+  - id: wf_pending_lines
+    type: std::vector<std::string>
+    restore_value: no
+  - id: wf_pending_detail
+    type: std::vector<std::string>
+    restore_value: no
+  - id: wf_pending_fail
+    type: std::vector<uint8_t>
+    restore_value: no
 
   # Carousel queue of new events since last fetch (newest first)
   - id: carousel_lines

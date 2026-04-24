@@ -469,6 +469,9 @@
           id(wf_tmp_success) = 0;
           id(wf_tmp_failed)  = 0;
           id(wf_cursor)      = 0;
+          id(wf_pending_lines).clear();
+          id(wf_pending_detail).clear();
+          id(wf_pending_fail).clear();
           ESP_LOGI("github", "workflow_runs sweep: %d active repo(s)",
                    (int) top_names.size());
       - while:
@@ -539,8 +542,11 @@
                           return;
                         }
                         JsonDocument filter;
+                        filter["workflow_runs"][0]["id"] = true;
+                        filter["workflow_runs"][0]["name"] = true;
                         filter["workflow_runs"][0]["status"] = true;
                         filter["workflow_runs"][0]["conclusion"] = true;
+                        filter["workflow_runs"][0]["head_branch"] = true;
                         JsonDocument doc;
                         DeserializationError err = deserializeJson(
                             doc, body, DeserializationOption::Filter(filter));
@@ -552,7 +558,16 @@
                         JsonArray runs = doc["workflow_runs"].as<JsonArray>();
                         if (runs.isNull()) return;
                         int r = 0, s = 0, f = 0;
+                        // Dedup state: on first sight of a repo, seed the
+                        // "already emitted" set with every completed run in
+                        // view so we don't spam the carousel with stale runs
+                        // at boot. Subsequent sweeps only emit runs with ids
+                        // we haven't emitted before.
+                        bool first_time = id(wf_emitted_ids).count(repo) == 0;
+                        auto &emitted = id(wf_emitted_ids)[repo];
+                        std::vector<long long> ids_in_response;
                         for (JsonObject run : runs) {
+                          long long rid = run["id"] | (long long) 0;
                           std::string status = run["status"] | "";
                           std::string concl  = run["conclusion"] | "";
                           if (status == "completed") {
@@ -562,6 +577,42 @@
                             // queued / in_progress / pending / waiting
                             r++;
                           }
+                          if (rid > 0) ids_in_response.push_back(rid);
+                          if (rid <= 0 || status != "completed") continue;
+                          bool already = std::find(emitted.begin(), emitted.end(), rid) != emitted.end();
+                          if (already) continue;
+                          emitted.push_back(rid);
+                          if (first_time) continue;  // seed without emitting
+                          std::string label;
+                          if      (concl == "success")   label = "CI OK";
+                          else if (concl == "failure")   label = "CI FAIL";
+                          else if (concl == "cancelled") label = "CI X";
+                          else if (concl == "skipped")   label = "CI -";
+                          else                           label = "CI ?";
+                          std::string short_repo = repo;
+                          auto slash = short_repo.find('/');
+                          if (slash != std::string::npos) short_repo = short_repo.substr(slash + 1);
+                          if (short_repo.size() > 22) short_repo = short_repo.substr(0, 22);
+                          std::string branch = run["head_branch"] | "";
+                          if (branch.size() > 14) branch = branch.substr(0, 14);
+                          std::string detail = branch.empty()
+                              ? short_repo
+                              : (branch + "  " + short_repo);
+                          id(wf_pending_lines).push_back(label);
+                          id(wf_pending_detail).push_back(detail);
+                          id(wf_pending_fail).push_back(concl == "failure" ? 1 : 0);
+                          ESP_LOGI("github", "  %s: wf slide %s / %s (id=%lld)",
+                                   repo.c_str(), label.c_str(), detail.c_str(), rid);
+                        }
+                        // Prune emitted set to ids currently visible so it
+                        // stays bounded (per_page=3 means <=3 entries/repo).
+                        if (!ids_in_response.empty()) {
+                          long long min_id = *std::min_element(
+                              ids_in_response.begin(), ids_in_response.end());
+                          emitted.erase(
+                              std::remove_if(emitted.begin(), emitted.end(),
+                                  [min_id](long long x){ return x < min_id; }),
+                              emitted.end());
                         }
                         id(wf_tmp_running) += r;
                         id(wf_tmp_success) += s;
@@ -588,6 +639,45 @@
           id(ci_failed)  = id(wf_tmp_failed);
           ESP_LOGI("github", "workflow_runs aggregate: run=%d ok=%d fail=%d",
                    id(ci_running), id(ci_success), id(ci_failed));
+          // Merge any new CI-run slides collected during the sweep into
+          // the carousel. These ride alongside push/PR/review slides from
+          // fetch_user_events; the aggregate carousel is capped so a busy
+          // repo can't push out user-activity slides indefinitely.
+          if (!id(wf_pending_lines).empty()) {
+            auto &cl = id(carousel_lines);
+            auto &cd = id(carousel_detail);
+            auto &cc = id(carousel_copilot);
+            auto &cf = id(carousel_ci_fail);
+            bool any_fail = false;
+            for (size_t i = 0; i < id(wf_pending_lines).size(); i++) {
+              cl.push_back(id(wf_pending_lines)[i]);
+              cd.push_back(id(wf_pending_detail)[i]);
+              cc.push_back(0);  // wf runs have no copilot attribution
+              uint8_t ff = id(wf_pending_fail)[i];
+              cf.push_back(ff);
+              if (ff) any_fail = true;
+            }
+            const size_t cap = 15;
+            if (cl.size() > cap) {
+              size_t drop = cl.size() - cap;
+              cl.erase(cl.begin(), cl.begin() + drop);
+              cd.erase(cd.begin(), cd.begin() + drop);
+              cc.erase(cc.begin(), cc.begin() + drop);
+              cf.erase(cf.begin(), cf.begin() + drop);
+            }
+            id(carousel_idx) = 0;
+            id(carousel_frames) = 20;
+            int needed = (int) cl.size() * 20 + 40;
+            const int three_min_frames = 720;
+            if (needed < three_min_frames) needed = three_min_frames;
+            if (id(idle_frames) < needed) id(idle_frames) = needed;
+            id(pending_beep) = true;
+            if (any_fail) id(pending_beep_fail) = true;
+            ESP_LOGI("github",
+                     "workflow_runs: merged %d CI slide(s) (carousel=%d, any_fail=%d)",
+                     (int) id(wf_pending_lines).size(), (int) cl.size(),
+                     any_fail ? 1 : 0);
+          }
           if (${debug_mem_logs_enabled}) {
             ESP_LOGI("mem", "workflow_runs done heap=%u int=%u/largest=%u psram=%u",
                      (unsigned) esp_get_free_heap_size(),
