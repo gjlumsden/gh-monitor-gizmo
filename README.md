@@ -254,7 +254,7 @@ first time it fails, so you can start with the minimum and add later.
 | Card                                 | Fine-grained permission              | Classic scope            |
 |--------------------------------------|--------------------------------------|--------------------------|
 | Events carousel + CI tally + donut   | Metadata: Read-only (default)        | (public) or `repo`       |
-| Private-repo events                  | Contents: Read-only                  | `repo`                   |
+| Private-repo events in carousel      | **not supported** (see note below)   | `read:user` (+ `repo`)   |
 | Copilot usage (billing)              | Plan: Read-only                      | `manage_billing:copilot` |
 | Contributions, PRs, Issues, Activity, Heatmap, Sparkline | Contents: Read-only + Pull requests: Read-only + Issues: Read-only | `repo`, `read:user`, `read:org` |
 | API rate-limit card                  | (any token)                          | (any)                    |
@@ -272,6 +272,15 @@ click **Authorize SSO** next to each org that uses SAML.
 
 A **fine-grained PAT** also works but must have each org and each
 repo granted explicitly, with the permissions above.
+
+> **Events carousel and fine-grained PATs.** GitHub's
+> `GET /users/{user}/events` endpoint returns **public events only**
+> when called with a fine-grained PAT — there is no permission you can
+> grant to change this. If most of your activity is in private or org
+> repos and the carousel looks stuck on an old public event, use a
+> **classic PAT with `read:user`** (plus `repo` for org-private repos).
+> The rest of the cards are unaffected — they use GraphQL, which honours
+> fine-grained permissions correctly.
 
 > **Copilot co-authored commits** only count toward your contributions
 > when the commit's primary `author` is you. A `Co-authored-by:` trailer
@@ -378,6 +387,11 @@ See [`secrets.yaml.example`](secrets.yaml.example) for the template.
 - **Nothing shown after boot** – the device waits 30 s for Wi-Fi, then
   polls. On first fetch only the top event is shown as proof of life;
   after that, only genuinely new events trigger a carousel.
+- **Events carousel stuck on an old event / only shows public activity** –
+  you're using a fine-grained PAT. The GitHub events endpoint ignores
+  fine-grained tokens for private event visibility. Switch to a
+  classic PAT with `read:user` (see
+  [Creating a GitHub token](#creating-a-github-token)).
 - **Contribution counts look too low** – check the token has access to
   the private/org repos you contribute to (see above). Classic PATs
   with SSO authorised per org are the most reliable.
