@@ -147,14 +147,18 @@ rtttl:
 
 binary_sensor:
   # Charging state derived from AXP192 power-status register 0x00
-  # (VBUS-present bit); updated by the 10 s poll in
+  # (VBUS-present bit); updated by the 1 s poll in
   # common/intervals.yaml. Exposed so the idle-UI header can draw
   # the bolt glyph and so HA / the logbook can see USB connect /
-  # disconnect events.
+  # disconnect events. The delayed_on/delayed_off filters debounce
+  # transient I2C reads so brief flickers don't flip the sensor.
   - platform: template
     name: "Charging"
     id: is_charging
     device_class: battery_charging
+    filters:
+      - delayed_on: 2s
+      - delayed_off: 2s
 
   - platform: gpio
     pin:

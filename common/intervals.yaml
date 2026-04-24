@@ -283,12 +283,18 @@ interval:
                    (unsigned) psram_free);
 
 
-  # Poll the PMIC every 10 s to publish is_charging. The register
+  # Poll the PMIC every 1 s to publish is_charging. The register
   # address, I2C address and bitmask differ between devices (PM1 on
   # the S3 vs AXP192 on the Plus 1.1), so the device-specific bits
   # are passed in via substitutions. Read is non-blocking: on an I2C
   # bus error we just skip this tick rather than holding the lock.
-  - interval: 10s
+  # The M5PM1 on the S3 is a derived-state register that can briefly
+  # report a stale "5VIN connected" value immediately after reboot,
+  # so the is_charging binary_sensor defines delayed_on/delayed_off
+  # filters to require two consecutive agreeing reads before flipping.
+  # startup_delay gives the PMIC time to settle before we poll it.
+  - interval: 1s
+    startup_delay: 3s
     then:
       - lambda: |-
           uint8_t reg = ${charger_read_reg};

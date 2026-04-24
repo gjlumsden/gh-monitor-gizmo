@@ -267,13 +267,20 @@ light:
 
 binary_sensor:
   # Charging state derived from the PM1 PWR_SRC register; updated by
-  # the 10 s poll in common/intervals.yaml. Exposed so the idle-UI
+  # the 1 s poll in common/intervals.yaml. Exposed so the idle-UI
   # header can draw the bolt glyph and so HA / the logbook can see
-  # USB connect / disconnect events.
+  # USB connect / disconnect events. The delayed_on/delayed_off
+  # filters suppress the brief post-reboot window where PWR_SRC can
+  # report a stale "5VIN connected" value before the PMIC state
+  # machine catches up with the actual electrical state, so we only
+  # flip the sensor after two consecutive agreeing reads.
   - platform: template
     name: "Charging"
     id: is_charging
     device_class: battery_charging
+    filters:
+      - delayed_on: 2s
+      - delayed_off: 2s
 
   - platform: gpio
     pin:
