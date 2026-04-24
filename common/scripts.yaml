@@ -491,6 +491,19 @@
                   Authorization: "Bearer ${github_token}"
                   Accept: "application/vnd.github+json"
                   X-GitHub-Api-Version: "2022-11-28"
+                  # Conditional GET. GitHub honours If-None-Match on workflow_runs
+                  # and responds with 304 (empty body, no primary rate-limit cost)
+                  # when the resource is unchanged, which is the common case at
+                  # minute-spaced polling. Cold cache / first sweep sends a
+                  # sentinel weak-etag that can never match a real resource, so
+                  # we get a normal 200 + etag capture on the first call.
+                  If-None-Match: !lambda |-
+                    auto it = id(wf_etag).find(id(active_repo_names)[id(wf_cursor)]);
+                    return it != id(wf_etag).end() ? it->second.c_str() : "W/\"none\"";
+                # Pull Etag out of the response so we can replay it on the next
+                # sweep. Names are lower-cased by http_request internally.
+                collect_headers:
+                  - etag
                 capture_response: true
                 on_error:
                   then:
@@ -502,10 +515,27 @@
                 on_response:
                   then:
                     - lambda: |-
+                        const std::string &repo = id(active_repo_names)[id(wf_cursor)];
+                        if (response->status_code == 304) {
+                          // Unchanged since our cached etag. Reuse the prior
+                          // per-repo counters (body is empty) so the aggregate
+                          // stays correct without re-parsing.
+                          auto rit = id(wf_cache_run).find(repo);
+                          auto oit = id(wf_cache_ok).find(repo);
+                          auto fit = id(wf_cache_fail).find(repo);
+                          int r = rit != id(wf_cache_run).end()  ? rit->second : 0;
+                          int s = oit != id(wf_cache_ok).end()   ? oit->second : 0;
+                          int f = fit != id(wf_cache_fail).end() ? fit->second : 0;
+                          id(wf_tmp_running) += r;
+                          id(wf_tmp_success) += s;
+                          id(wf_tmp_failed)  += f;
+                          ESP_LOGI("github", "  %s: 304 cached run=%d ok=%d fail=%d",
+                                   repo.c_str(), r, s, f);
+                          return;
+                        }
                         if (response->status_code != 200) {
                           ESP_LOGW("github", "workflow_runs HTTP %d for %s",
-                                   response->status_code,
-                                   id(active_repo_names)[id(wf_cursor)].c_str());
+                                   response->status_code, repo.c_str());
                           return;
                         }
                         JsonDocument filter;
@@ -516,8 +546,7 @@
                             doc, body, DeserializationOption::Filter(filter));
                         if (err) {
                           ESP_LOGW("github", "workflow_runs parse failed for %s: %s",
-                                   id(active_repo_names)[id(wf_cursor)].c_str(),
-                                   err.c_str());
+                                   repo.c_str(), err.c_str());
                           return;
                         }
                         JsonArray runs = doc["workflow_runs"].as<JsonArray>();
@@ -537,9 +566,17 @@
                         id(wf_tmp_running) += r;
                         id(wf_tmp_success) += s;
                         id(wf_tmp_failed)  += f;
-                        ESP_LOGI("github", "  %s: run=%d ok=%d fail=%d",
-                                 id(active_repo_names)[id(wf_cursor)].c_str(),
-                                 r, s, f);
+                        // Remember per-repo counts so future 304s replay them.
+                        id(wf_cache_run)[repo]  = r;
+                        id(wf_cache_ok)[repo]   = s;
+                        id(wf_cache_fail)[repo] = f;
+                        std::string etag = response->get_response_header("etag");
+                        if (!etag.empty()) {
+                          id(wf_etag)[repo] = etag;
+                        }
+                        ESP_LOGI("github", "  %s: 200 run=%d ok=%d fail=%d etag=%s",
+                                 repo.c_str(), r, s, f,
+                                 etag.empty() ? "none" : "cached");
             # Space the per-repo requests out so we don't stack TLS
             # handshakes tight enough to starve the scheduler on a
             # busy board.

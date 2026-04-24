@@ -277,6 +277,24 @@ globals:
     type: int
     restore_value: no
     initial_value: '0'
+  # ETag cache for the workflow_runs sweep. CI results change far less
+  # often than we poll (~1/min), so replaying a prior ETag via
+  # If-None-Match gets us 304 Not Modified with an empty body on the
+  # steady-state path. 304s don't count against the primary rate limit
+  # and skip JSON parsing entirely. Cached per-repo counters are reused
+  # on 304 so the aggregate still reflects the correct totals.
+  - id: wf_etag
+    type: std::map<std::string, std::string>
+    restore_value: no
+  - id: wf_cache_run
+    type: std::map<std::string, int>
+    restore_value: no
+  - id: wf_cache_ok
+    type: std::map<std::string, int>
+    restore_value: no
+  - id: wf_cache_fail
+    type: std::map<std::string, int>
+    restore_value: no
 
   # Carousel queue of new events since last fetch (newest first)
   - id: carousel_lines
