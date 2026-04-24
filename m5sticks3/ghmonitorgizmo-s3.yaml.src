@@ -85,6 +85,16 @@ substitutions:
   idle_bouncer_seconds: "10"
   idle_screen_off_cycles: "3"
 
+  # --- Charger detection ---
+  # PMIC register poll used by common/intervals.yaml to publish the
+  # is_charging binary_sensor. On the S3 the PM1 power-management IC
+  # lives at I2C 0x6e and reports the active power source in bits
+  # [2:0] of PWR_SRC (reg 0x04): 0=5VIN, 1=5VINOUT, 2=battery, so
+  # "charging" means anything other than battery.
+  charger_i2c_addr: "0x6e"
+  charger_read_reg: "0x04"
+  charger_is_present: "(val & 0x07) != 2"
+
   # --- Networking (static IP) ---
   # To use DHCP instead, delete the `manual_ip:` block in `wifi:` below;
   # these substitutions then become unused and can be removed.
@@ -256,6 +266,15 @@ light:
     internal: true
 
 binary_sensor:
+  # Charging state derived from the PM1 PWR_SRC register; updated by
+  # the 10 s poll in common/intervals.yaml. Exposed so the idle-UI
+  # header can draw the bolt glyph and so HA / the logbook can see
+  # USB connect / disconnect events.
+  - platform: template
+    name: "Charging"
+    id: is_charging
+    device_class: battery_charging
+
   - platform: gpio
     pin:
       number: GPIO11       # StickS3 KEY1
@@ -459,19 +478,6 @@ sensor:
       if (level < 0) level = 0;
       if (level > 100) level = 100;
       return (float) level;
-
-  - platform: template
-    name: "Charging"
-    id: is_charging
-    device_class: battery_charging
-    update_interval: 10s
-    lambda: |-
-      uint8_t reg = 0x04;  // M5PM1_REG_PWR_SRC
-      if (id(bus_a)->write(0x6e, &reg, 1, false) != i2c::ERROR_OK) return {};
-      uint8_t val = 0;
-      if (id(bus_a)->read(0x6e, &val, 1) != i2c::ERROR_OK) return {};
-      // bits [2:0]: 0 = 5VIN, 1 = 5VINOUT, 2 = battery
-      return (val & 0x07) != 2;
 
   # Liveness diagnostics exposed to HA(or web_server on the standalone
   # variant) so long-term stability can be tracked without tailing

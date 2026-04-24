@@ -282,3 +282,17 @@ interval:
                    (unsigned) internal_free, (unsigned) internal_largest,
                    (unsigned) psram_free);
 
+
+  # Poll the PMIC every 10 s to publish is_charging. The register
+  # address, I2C address and bitmask differ between devices (PM1 on
+  # the S3 vs AXP192 on the Plus 1.1), so the device-specific bits
+  # are passed in via substitutions. Read is non-blocking: on an I2C
+  # bus error we just skip this tick rather than holding the lock.
+  - interval: 10s
+    then:
+      - lambda: |-
+          uint8_t reg = ${charger_read_reg};
+          if (id(bus_a)->write(${charger_i2c_addr}, &reg, 1, false) != i2c::ERROR_OK) return;
+          uint8_t val = 0;
+          if (id(bus_a)->read(${charger_i2c_addr}, &val, 1) != i2c::ERROR_OK) return;
+          id(is_charging).publish_state(${charger_is_present});

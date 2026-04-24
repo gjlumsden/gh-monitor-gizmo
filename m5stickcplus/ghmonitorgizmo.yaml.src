@@ -79,6 +79,16 @@ substitutions:
   idle_bouncer_seconds: "10"
   idle_screen_off_cycles: "1"
 
+  # --- Charger detection ---
+  # PMIC register poll used by common/intervals.yaml to publish the
+  # is_charging binary_sensor. On the Plus 1.1 the AXP192 lives at
+  # I2C 0x34 and reports VBUS present in bit 5 of the power-status
+  # register (0x00); when that bit is set the device is running from
+  # USB / charging the battery.
+  charger_i2c_addr: "0x34"
+  charger_read_reg: "0x00"
+  charger_is_present: "(val & 0x20) != 0"
+
   # --- Networking (static IP) ---
   # To use DHCP instead, delete the `manual_ip:` block in `wifi:` below;
   # these substitutions then become unused and can be removed.
@@ -136,6 +146,16 @@ rtttl:
   output: buzzer_out
 
 binary_sensor:
+  # Charging state derived from AXP192 power-status register 0x00
+  # (VBUS-present bit); updated by the 10 s poll in
+  # common/intervals.yaml. Exposed so the idle-UI header can draw
+  # the bolt glyph and so HA / the logbook can see USB connect /
+  # disconnect events.
+  - platform: template
+    name: "Charging"
+    id: is_charging
+    device_class: battery_charging
+
   - platform: gpio
     pin:
       number: GPIO37
@@ -281,19 +301,3 @@ sensor:
       if (pct > 100) pct = 100;
       return pct;
 
-  # Charging state comes from AXP192 register 0x00 (Input power status),
-  # bit 5 = VBUS present. Reference: X-Powers AXP192 datasheet
-  # "REG 00H: Power status" and m5stack/M5Unified Power_Class_AXP192
-  # implementation. Polled every 10 s so the header bolt glyph appears
-  # within one carousel tick of USB insertion.
-  - platform: template
-    name: "Charging"
-    id: is_charging
-    device_class: battery_charging
-    update_interval: 10s
-    lambda: |-
-      uint8_t reg = 0x00;
-      if (id(bus_a)->write(0x34, &reg, 1, false) != i2c::ERROR_OK) return {};
-      uint8_t val = 0;
-      if (id(bus_a)->read(0x34, &val, 1) != i2c::ERROR_OK) return {};
-      return (val & 0x20) != 0;  // bit 5 = VBUS present
