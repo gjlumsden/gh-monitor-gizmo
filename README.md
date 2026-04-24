@@ -258,7 +258,7 @@ first time it fails, so you can start with the minimum and add later.
 | Copilot usage (billing)              | Plan: Read-only                      | `manage_billing:copilot` |
 | Contributions, PRs, Issues, Activity, Heatmap, Sparkline | Contents: Read-only + Pull requests: Read-only + Issues: Read-only | `repo`, `read:user`, `read:org` |
 | API rate-limit card                  | (any token)                          | (any)                    |
-| Dependabot alerts                    | Dependabot alerts: Read-only         | `security_events`        |
+| Dependabot alerts                    | Dependabot alerts: Read-only         | `repo`                   |
 
 The firmware uses the GraphQL `viewer` field, so private and org
 contributions are counted automatically if the token can see those
@@ -266,9 +266,13 @@ repos — the old "Include private contributions on my profile" toggle
 is **not** required.
 
 For **org repos**, a **classic PAT** is the most reliable route:
-generate one with `repo`, `read:org`, `read:user`, and (if you want
-the Dependabot card) `security_events`. On the token's settings page,
-click **Authorize SSO** next to each org that uses SAML.
+generate one with `repo`, `read:org`, and `read:user`. The `repo`
+scope also covers the Dependabot alerts card — it uses the
+user-level `/user/dependabot/alerts` endpoint, which requires `repo`
+(not `security_events`; see
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#dependabot-rest-integration)).
+On the token's settings page, click **Authorize SSO** next to each
+org that uses SAML.
 
 A **fine-grained PAT** also works but must have each org and each
 repo granted explicitly, with the permissions above.
@@ -398,10 +402,14 @@ See [`secrets.yaml.example`](secrets.yaml.example) for the template.
 - **Contribution counts look too low** – check the token has access to
   the private/org repos you contribute to (see above). Classic PATs
   with SSO authorised per org are the most reliable.
-- **Dependabot card never appears** – the token is missing
-  `security_events` / `Dependabot alerts: Read-only`, or the account
-  has no alerts to show. The card is silently disabled on the first
-  401/403/404 and won't retry until reboot.
+- **Dependabot card never appears** – the token is missing the
+  `repo` scope (classic PAT) or `Dependabot alerts: Read-only`
+  (fine-grained). The user-level endpoint also returns **HTTP 404**
+  — not `[]` — when you currently have zero open alerts across every
+  reachable repo; the firmware treats that as transient and retries
+  next interval. Only `401` / `403` latches the card off until
+  reboot. See
+  [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#dependabot-rest-integration).
 - **Battery reads 100 % with USB plugged** – that's the AXP192's raw
   voltage crossing the upper bound of the 3.3–4.2 V mapping.
 
@@ -467,6 +475,11 @@ For editing the YAML locally, the
 [ESPHome VS Code extension][vscode-ext] is very useful – it gives you
 schema validation, autocomplete, and inline docs for every component.
 
+Deeper internals — the dual-variant build, `build.py` pipeline,
+substitution-based feature-gate pattern, Dependabot REST quirks, and
+night-mode beep suppression — live in
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
 ## Further reading
 
 - [ESPHome documentation][esphome]
@@ -475,6 +488,15 @@ schema validation, autocomplete, and inline docs for every component.
 - [M5StickC Plus 1.1 hardware docs][m5]
 - [M5Stick S3 hardware docs][m5s3]
 - [GitHub Events API][gh-events]
+- [Architecture & internals](docs/ARCHITECTURE.md) — build pipeline,
+  feature gates, Dependabot REST quirks, night-mode, crash history
+- Tracking issues:
+  [#2](https://github.com/gjlumsden/gh-monitor-gizmo/issues/2) (closed, Dependabot REST redesign),
+  [#4](https://github.com/gjlumsden/gh-monitor-gizmo/issues/4) (S3 hardware audit),
+  [#7](https://github.com/gjlumsden/gh-monitor-gizmo/issues/7) (Plus 1.1 hardware audit),
+  [#9](https://github.com/gjlumsden/gh-monitor-gizmo/issues/9) (packages migration),
+  [#10](https://github.com/gjlumsden/gh-monitor-gizmo/issues/10) (BT-proxy variant),
+  [#11](https://github.com/gjlumsden/gh-monitor-gizmo/issues/11) (end-to-end validation)
 
 ## Licence
 
