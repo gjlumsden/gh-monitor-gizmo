@@ -691,37 +691,40 @@
             Accept: "application/vnd.github+json"
             Content-Type: "application/json"
           body: !lambda |-
-            auto pad2 = [](int v) {
-              char b[4]; snprintf(b, sizeof(b), "%02d", v); return std::string(b);
-            };
             auto now = id(sntp_time).now();
-            std::string day_start, week_start, year_start;
+            std::string day_start, week_start;
             if (now.is_valid()) {
-              char ybuf[8]; snprintf(ybuf, sizeof(ybuf), "%04d", now.year);
-              day_start  = std::string(ybuf) + "-" + pad2(now.month) + "-" + pad2(now.day_of_month) + "T00:00:00Z";
-              // Week starts Monday (UTC)
+              // Compute the UTC instant of local midnight today, and
+              // of local Monday midnight, and emit each as an ISO-8601
+              // UTC timestamp. Using gmtime_r's actual H/M/S (rather
+              // than a hardcoded "T00:00:00Z") keeps the TODAY/WEEK
+              // boundaries aligned with the user's local calendar even
+              // in non-UTC timezones (e.g. Europe/London / BST), where
+              // local midnight is not UTC midnight.
+              time_t d_t = now.timestamp -
+                           (now.hour * 3600 + now.minute * 60 + now.second);
+              struct tm dt; gmtime_r(&d_t, &dt);
+              char db[24]; snprintf(db, sizeof(db), "%04d-%02d-%02dT%02d:%02d:%02dZ",
+                                    dt.tm_year + 1900, dt.tm_mon + 1, dt.tm_mday,
+                                    dt.tm_hour, dt.tm_min, dt.tm_sec);
+              day_start = db;
+              // Week starts Monday (local).
               int dow = now.day_of_week;  // 1=Sun..7=Sat (ESPHome convention)
               int back = (dow == 1) ? 6 : (dow - 2);
               time_t t = now.timestamp - (back * 86400) -
                          (now.hour * 3600 + now.minute * 60 + now.second);
               struct tm wt; gmtime_r(&t, &wt);
-              char wb[24]; snprintf(wb, sizeof(wb), "%04d-%02d-%02dT00:00:00Z",
-                                    wt.tm_year + 1900, wt.tm_mon + 1, wt.tm_mday);
+              char wb[24]; snprintf(wb, sizeof(wb), "%04d-%02d-%02dT%02d:%02d:%02dZ",
+                                    wt.tm_year + 1900, wt.tm_mon + 1, wt.tm_mday,
+                                    wt.tm_hour, wt.tm_min, wt.tm_sec);
               week_start = wb;
-              // Rolling 12-month window: same as fetch_cal_graphql's default
-              // contributionsCollection window so the YEAR column in the
-              // stats table matches the period covered by the heatmap/sparkline.
-              // (Previously this was YYYY-01-01, i.e. calendar-YTD only, which
-              // diverged from the heatmap after any January 1st.)
-              time_t yr_t = now.timestamp - (365 * 86400);
-              struct tm yrt; gmtime_r(&yr_t, &yrt);
-              char yrb[24]; snprintf(yrb, sizeof(yrb), "%04d-%02d-%02dT00:00:00Z",
-                                    yrt.tm_year + 1900, yrt.tm_mon + 1, yrt.tm_mday);
-              year_start = yrb;
+              // The YEAR column uses GitHub's default contributionsCollection
+              // window (exactly 1 year ending now) by omitting `from:` from
+              // the year sub-query — matches fetch_cal_graphql's window and
+              // avoids any risk of tripping GitHub's 1-year window cap.
             } else {
               day_start = "2026-01-01T00:00:00Z";
               week_start = "2026-01-01T00:00:00Z";
-              year_start = "2026-01-01T00:00:00Z";
             }
 
             // Use `viewer` rather than `user(login:...)` so we see the
@@ -732,10 +735,10 @@
             // YAML source so ESPHome's substitution parser doesn't warn about
             // "undefined variable" for GraphQL query variables.
             std::string q =
-              "query(\044dayStart:DateTime!, \044weekStart:DateTime!, \044yearStart:DateTime!) {"
+              "query(\044dayStart:DateTime!, \044weekStart:DateTime!) {"
               "  today: viewer{ contributionsCollection(from:\044dayStart){ totalCommitContributions totalPullRequestContributions totalPullRequestReviewContributions totalIssueContributions } }"
               "  week:  viewer{ contributionsCollection(from:\044weekStart){ totalCommitContributions totalPullRequestContributions totalPullRequestReviewContributions totalIssueContributions } }"
-              "  year:  viewer{ contributionsCollection(from:\044yearStart){ totalCommitContributions totalPullRequestContributions } }"
+              "  year:  viewer{ contributionsCollection{ totalCommitContributions totalPullRequestContributions } }"
               "}";
 
             std::string body;
@@ -744,8 +747,7 @@
             for (char c : q) { if (c == '"') body += "\\\""; else body += c; }
             body += "\",\"variables\":{";
             body += "\"dayStart\":\"" + day_start + "\",";
-            body += "\"weekStart\":\"" + week_start + "\",";
-            body += "\"yearStart\":\"" + year_start + "\"";
+            body += "\"weekStart\":\"" + week_start + "\"";
             body += "}}";
             return body;
           capture_response: true
@@ -866,13 +868,24 @@
             std::string merged_week, open_q, review_q;
             std::string issues_assigned_q, issues_authored_q, issues_closed_q;
             if (now.is_valid()) {
+              // Monday-of-this-week date in LOCAL calendar terms. GitHub
+              // search date qualifiers (merged:>=, closed:>=) are date-only
+              // and are interpreted in the token owner's GitHub-configured
+              // timezone, so this is a best-effort approximation. Computing
+              // from local Y/M/D (normalized via mktime) keeps the boundary
+              // aligned with the user's local Monday rather than with a
+              // UTC-shifted day (which in BST backdated it to Sunday).
               int dow = now.day_of_week;  // 1=Sun..7=Sat
               int back = (dow == 1) ? 6 : (dow - 2);
-              time_t t = now.timestamp - (back * 86400) -
-                         (now.hour * 3600 + now.minute * 60 + now.second);
-              struct tm wt; gmtime_r(&t, &wt);
+              struct tm lt = {};
+              lt.tm_year = now.year - 1900;
+              lt.tm_mon  = now.month - 1;
+              lt.tm_mday = now.day_of_month - back;
+              lt.tm_hour = 0; lt.tm_min = 0; lt.tm_sec = 0;
+              lt.tm_isdst = -1;
+              mktime(&lt);  // normalizes out-of-range tm_mday
               char mb[16]; snprintf(mb, sizeof(mb), "%04d-%02d-%02d",
-                                    wt.tm_year + 1900, wt.tm_mon + 1, wt.tm_mday);
+                                    lt.tm_year + 1900, lt.tm_mon + 1, lt.tm_mday);
               merged_week = std::string("is:pr author:") + "${github_user}" +
                             " is:merged merged:>=" + mb;
               issues_closed_q = std::string("is:issue author:") + "${github_user}" +
