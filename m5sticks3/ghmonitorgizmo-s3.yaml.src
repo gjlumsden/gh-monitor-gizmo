@@ -83,7 +83,7 @@ substitutions:
   # A new event also wakes the screen via the existing events window.
   idle_card_seconds: "10"
   idle_bouncer_seconds: "10"
-  idle_screen_off_cycles: "0"
+  idle_screen_off_cycles: "3"
 
   # --- Networking (static IP) ---
   # To use DHCP instead, delete the `manual_ip:` block in `wifi:` below;
