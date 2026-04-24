@@ -476,8 +476,17 @@
             lambda: 'return id(wf_cursor) < (int) id(active_repo_names).size();'
           then:
             - http_request.get:
-                url: !lambda 'return std::string("https://api.github.com/repos/") + id(active_repo_names)[id(wf_cursor)] + "/actions/runs?per_page=5";'
-                max_response_buffer_size: 16384
+                # per_page=3 + exclude_pull_requests=true + 48 KB buffer.
+                # workflow_run objects are surprisingly fat (10-15 KB each with
+                # embedded head_commit / head_repository / repository / actor /
+                # pull_requests), so per_page=3 with a 32 KB buffer STILL
+                # truncated mid-parse on repos with rich runs. exclude_pull_requests
+                # is the biggest single lever (GitHub strips the pull_requests
+                # array server-side, often 1-3 KB per run), and 48 KB buffer
+                # gives enough headroom for 3 heavy runs. We only aggregate
+                # status/conclusion counters from the response.
+                url: !lambda 'return std::string("https://api.github.com/repos/") + id(active_repo_names)[id(wf_cursor)] + "/actions/runs?per_page=3&exclude_pull_requests=true";'
+                max_response_buffer_size: 49152
                 request_headers:
                   Authorization: "Bearer ${github_token}"
                   Accept: "application/vnd.github+json"
