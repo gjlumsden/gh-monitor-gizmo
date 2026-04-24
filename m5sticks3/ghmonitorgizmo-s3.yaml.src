@@ -15,17 +15,14 @@ substitutions:
 
   # --- Beeps ---
   # Short RTTTL tones played via the ES8311 codec + AW8737 amp on I2S0.
-  # `card_beep_enabled` gates the screensaver info-card beeps (it is
-  # checked by the shared intervals/scripts fragments); event and CI
-  # beeps are always enabled when they fire. The amp can get quite
-  # loud; M5Stack recommend keeping volume <= 0.75. 0.2 is a gentle
-  # level that is audible across a room without being startling.
-  card_beep_enabled: "true"
+  # The two beep toggles are runtime switches now (see
+  # common/feature_gates.yaml). `card_beep_enabled` gates the
+  # screensaver info-card beeps; `beeps_enabled` is the master switch
+  # for ALL chimes (boot, event, card, ping, fail). Both default ON.
+  # The amp can get quite loud; M5Stack recommend keeping volume
+  # <= 0.75. 0.2 is a gentle level that is audible across a room
+  # without being startling.
   speaker_volume: "0.15"
-  # Master switch for ALL chimes (boot, event, card, ping, fail).
-  # Set to "false" to silence the device entirely — useful for
-  # isolating audio-stack power draw as a crash trigger.
-  beeps_enabled: "true"
 
   # --- CI (GitHub Actions) ---
   # When true the top-bar CI counters (running/ok/fail) and the CI
@@ -39,19 +36,13 @@ substitutions:
   active_repo_cap: "8"
 
   # --- Feature gates ---
-  # Per-fetch feature toggles. Flip individually to "false" to isolate a
-  # misbehaving fetch (e.g. when bisecting a crash or rate-limit issue)
-  # without editing the shared scripts/intervals fragments.
   # `debug_mem_logs_enabled` adds heap/internal-SRAM/PSRAM trace lines
-  # around each fetch; leave off in normal use.
+  # around each fetch; leave off in normal use. The per-fetch feature
+  # toggles (user_events / copilot_usage / stats / stats_search /
+  # calendar / rate_limit / dependabot) are runtime switches now --
+  # see common/feature_gates.yaml -- so you can bisect fetches from
+  # Home Assistant / the web UI without editing YAML.
   debug_mem_logs_enabled: "false"
-  user_events_enabled: "true"
-  copilot_usage_enabled: "true"
-  stats_enabled: "true"
-  stats_search_enabled: "true"
-  calendar_enabled: "true"
-  rate_limit_enabled: "true"
-  dependabot_enabled: "true"
   http_buffer_rx_size: "12288"
   http_buffer_tx_size: "1024"
 
@@ -200,7 +191,7 @@ esphome:
       # Quick boot chime so it's obvious the audio chain is alive.
       - if:
           condition:
-            lambda: 'return ${beeps_enabled} && !id(screen_asleep);'
+            lambda: 'return id(beeps_enabled) && !id(screen_asleep);'
           then:
             - delay: 500ms
             - rtttl.play: "boot:d=8,o=6,b=220:c,e,g"
@@ -390,7 +381,7 @@ script:
     then:
       - if:
           condition:
-            lambda: 'return ${beeps_enabled} && !id(screen_asleep);'
+            lambda: 'return id(beeps_enabled) && !id(screen_asleep);'
           then:
             - rtttl.play: "blip:d=8,o=6,b=220:g,e"
   - id: play_beep_fail
@@ -398,7 +389,7 @@ script:
     then:
       - if:
           condition:
-            lambda: 'return ${beeps_enabled} && !id(screen_asleep);'
+            lambda: 'return id(beeps_enabled) && !id(screen_asleep);'
           then:
             - rtttl.play: "fail:d=8,o=5,b=220:e,c,a4,p"
   - id: play_beep_ping
@@ -406,7 +397,7 @@ script:
     then:
       - if:
           condition:
-            lambda: 'return ${beeps_enabled} && !id(screen_asleep);'
+            lambda: 'return id(beeps_enabled) && !id(screen_asleep);'
           then:
             - rtttl.play: "ping:d=16,o=6,b=300:e,g"
 

@@ -1,0 +1,153 @@
+# Runtime feature gates (issue #9 part C).
+#
+# Each of the flags below started life as a compile-time
+# `${foo_enabled}` substitution. They are now `globals:` with
+# `restore_value: yes` so user choices survive a reboot, and each one is
+# paired with a template `switch:` so Home Assistant (or the standalone
+# web_server) can flip the gate live without a reflash.
+#
+# The initial_value for every flag matches the original substitution
+# default ("true"). Template switches use `restore_mode: RESTORE_DEFAULT_ON`
+# so a freshly-flashed device -- before any HA / web_server interaction
+# -- behaves identically to the previous compile-time default.
+#
+# This file is chain-included from the end of common/globals.yaml so the
+# nine items below extend that file's top-level `globals:` list (ESPHome
+# rejects two top-level `globals:` keys in one document). The `switch:`
+# block is top-level and self-contained.
+  - id: beeps_enabled
+    type: bool
+    restore_value: yes
+    initial_value: 'true'
+  - id: card_beep_enabled
+    type: bool
+    restore_value: yes
+    initial_value: 'true'
+  - id: dependabot_enabled
+    type: bool
+    restore_value: yes
+    initial_value: 'true'
+  - id: user_events_enabled
+    type: bool
+    restore_value: yes
+    initial_value: 'true'
+  - id: copilot_usage_enabled
+    type: bool
+    restore_value: yes
+    initial_value: 'true'
+  - id: stats_enabled
+    type: bool
+    restore_value: yes
+    initial_value: 'true'
+  - id: stats_search_enabled
+    type: bool
+    restore_value: yes
+    initial_value: 'true'
+  - id: calendar_enabled
+    type: bool
+    restore_value: yes
+    initial_value: 'true'
+  - id: rate_limit_enabled
+    type: bool
+    restore_value: yes
+    initial_value: 'true'
+
+switch:
+  - platform: template
+    name: "Beeps Enabled"
+    icon: "mdi:bell"
+    lambda: 'return id(beeps_enabled);'
+    turn_on_action:
+      - lambda: 'id(beeps_enabled) = true;'
+    turn_off_action:
+      - lambda: 'id(beeps_enabled) = false;'
+    optimistic: false
+    restore_mode: RESTORE_DEFAULT_ON
+
+  - platform: template
+    name: "Card Beep Enabled"
+    icon: "mdi:bell-ring-outline"
+    lambda: 'return id(card_beep_enabled);'
+    turn_on_action:
+      - lambda: 'id(card_beep_enabled) = true;'
+    turn_off_action:
+      - lambda: 'id(card_beep_enabled) = false;'
+    optimistic: false
+    restore_mode: RESTORE_DEFAULT_ON
+
+  - platform: template
+    name: "Dependabot Enabled"
+    icon: "mdi:shield-bug-outline"
+    lambda: 'return id(dependabot_enabled);'
+    turn_on_action:
+      - lambda: 'id(dependabot_enabled) = true;'
+    turn_off_action:
+      - lambda: 'id(dependabot_enabled) = false;'
+    optimistic: false
+    restore_mode: RESTORE_DEFAULT_ON
+
+  - platform: template
+    name: "User Events Enabled"
+    icon: "mdi:timeline-text-outline"
+    lambda: 'return id(user_events_enabled);'
+    turn_on_action:
+      - lambda: 'id(user_events_enabled) = true;'
+    turn_off_action:
+      - lambda: 'id(user_events_enabled) = false;'
+    optimistic: false
+    restore_mode: RESTORE_DEFAULT_ON
+
+  - platform: template
+    name: "Copilot Usage Enabled"
+    icon: "mdi:robot-outline"
+    lambda: 'return id(copilot_usage_enabled);'
+    turn_on_action:
+      - lambda: 'id(copilot_usage_enabled) = true;'
+    turn_off_action:
+      - lambda: 'id(copilot_usage_enabled) = false;'
+    optimistic: false
+    restore_mode: RESTORE_DEFAULT_ON
+
+  - platform: template
+    name: "Stats Enabled"
+    icon: "mdi:chart-line"
+    lambda: 'return id(stats_enabled);'
+    turn_on_action:
+      - lambda: 'id(stats_enabled) = true;'
+    turn_off_action:
+      - lambda: 'id(stats_enabled) = false;'
+    optimistic: false
+    restore_mode: RESTORE_DEFAULT_ON
+
+  - platform: template
+    name: "Stats Search Enabled"
+    icon: "mdi:chart-box-outline"
+    lambda: 'return id(stats_search_enabled);'
+    turn_on_action:
+      - lambda: 'id(stats_search_enabled) = true;'
+    turn_off_action:
+      - lambda: 'id(stats_search_enabled) = false;'
+    optimistic: false
+    restore_mode: RESTORE_DEFAULT_ON
+
+  - platform: template
+    name: "Calendar Enabled"
+    icon: "mdi:calendar-month-outline"
+    lambda: 'return id(calendar_enabled);'
+    turn_on_action:
+      - lambda: 'id(calendar_enabled) = true;'
+    turn_off_action:
+      - lambda: 'id(calendar_enabled) = false;'
+    optimistic: false
+    restore_mode: RESTORE_DEFAULT_ON
+
+  - platform: template
+    name: "Rate Limit Enabled"
+    icon: "mdi:speedometer"
+    lambda: 'return id(rate_limit_enabled);'
+    turn_on_action:
+      - lambda: 'id(rate_limit_enabled) = true;'
+    turn_off_action:
+      - lambda: 'id(rate_limit_enabled) = false;'
+    optimistic: false
+    restore_mode: RESTORE_DEFAULT_ON

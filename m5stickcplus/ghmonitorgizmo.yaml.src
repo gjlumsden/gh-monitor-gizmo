@@ -14,13 +14,10 @@ substitutions:
   timezone: "Europe/London"
 
   # --- Beeps ---
-  # Set to "false" to silence the short beep that plays each time a
-  # screensaver info card (Copilot / Contributions / PRs / CI / Rate
-  # Limit) appears. The new-event success/fail beeps are unaffected.
-  card_beep_enabled: "true"
-  # Master switch for ALL chimes. Set to "false" to silence the
-  # device entirely (boot, event, card, ping, fail).
-  beeps_enabled: "true"
+  # The two beep toggles are runtime switches now (see
+  # common/feature_gates.yaml): `card_beep_enabled` gates the
+  # screensaver info-card beeps; `beeps_enabled` is the master switch
+  # for ALL chimes. Both default ON.
 
   # --- CI (GitHub Actions) ---
   # The M5StickC Plus 1.1 has very limited screen real estate, so the
@@ -46,16 +43,12 @@ substitutions:
   active_repo_cap: "8"
 
   # --- Live-debug toggles ---
-  # Shared script fragments use these on both devices so the S3 can be
+  # Shared script fragments use this on both devices so the S3 can be
   # A/B tested without carrying device-specific branches in common/.
+  # The per-fetch feature toggles (user_events / copilot_usage /
+  # stats / stats_search / calendar / rate_limit / dependabot) are
+  # runtime switches now; see common/feature_gates.yaml.
   debug_mem_logs_enabled: "false"
-  user_events_enabled: "true"
-  copilot_usage_enabled: "true"
-  stats_enabled: "true"
-  stats_search_enabled: "true"
-  calendar_enabled: "true"
-  rate_limit_enabled: "true"
-  dependabot_enabled: "true"
   http_buffer_rx_size: "12288"
   http_buffer_tx_size: "1024"
 
@@ -243,7 +236,7 @@ script:
     then:
       - if:
           condition:
-            lambda: 'return ${beeps_enabled} && !id(screen_asleep);'
+            lambda: 'return id(beeps_enabled) && !id(screen_asleep);'
           then:
             - rtttl.play: "blip:d=32,o=6,b=300:c"
   - id: play_beep_fail
@@ -251,7 +244,7 @@ script:
     then:
       - if:
           condition:
-            lambda: 'return ${beeps_enabled} && !id(screen_asleep);'
+            lambda: 'return id(beeps_enabled) && !id(screen_asleep);'
           then:
             - rtttl.play: "fail:d=8,o=5,b=220:e,c,a4,p"
   - id: play_beep_ping
@@ -259,7 +252,7 @@ script:
     then:
       - if:
           condition:
-            lambda: 'return ${beeps_enabled} && !id(screen_asleep);'
+            lambda: 'return id(beeps_enabled) && !id(screen_asleep);'
           then:
             - rtttl.play: "ping:d=16,o=6,b=300:e,g"
 

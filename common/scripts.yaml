@@ -833,7 +833,7 @@
               # stack breathe and the display interval catch up.
               - if:
                   condition:
-                    lambda: 'return ${stats_search_enabled};'
+                    lambda: 'return id(stats_search_enabled);'
                   then:
                     - delay: 2s
                     - script.execute: fetch_stats_search

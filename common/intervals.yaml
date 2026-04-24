@@ -145,7 +145,7 @@ interval:
           condition:
             and:
               - lambda: 'return id(pending_card_beep);'
-              - lambda: 'return ${card_beep_enabled};'
+              - lambda: 'return id(card_beep_enabled);'
           then:
             - lambda: 'id(pending_card_beep) = false;'
             - script.execute: play_beep_card
@@ -165,7 +165,7 @@ interval:
           condition:
             and:
               - wifi.connected:
-              - lambda: 'return ${user_events_enabled};'
+              - lambda: 'return id(user_events_enabled);'
           then:
             - lambda: 'id(user_retry_pending) = false;'
             - script.execute: fetch_user_events
@@ -194,7 +194,7 @@ interval:
           condition:
             and:
               - wifi.connected:
-              - lambda: 'return ${copilot_usage_enabled};'
+              - lambda: 'return id(copilot_usage_enabled);'
               - lambda: 'return !id(copilot_disabled);'
               - lambda: 'return id(idle_ui_active);'
           then:
@@ -208,7 +208,7 @@ interval:
           condition:
             and:
               - wifi.connected:
-              - lambda: 'return ${stats_enabled};'
+              - lambda: 'return id(stats_enabled);'
               - lambda: 'return !id(stats_disabled);'
               - lambda: 'return id(idle_ui_active);'
           then:
@@ -222,7 +222,7 @@ interval:
           condition:
             and:
               - wifi.connected:
-              - lambda: 'return ${calendar_enabled};'
+              - lambda: 'return id(calendar_enabled);'
               - lambda: 'return id(idle_ui_active);'
           then:
             - lambda: 'id(cal_retry_pending) = false;'
@@ -235,7 +235,7 @@ interval:
           condition:
             and:
               - wifi.connected:
-              - lambda: 'return ${rate_limit_enabled};'
+              - lambda: 'return id(rate_limit_enabled);'
               - lambda: 'return id(idle_ui_active);'
           then:
             - lambda: 'id(ratelimit_retry_pending) = false;'
@@ -248,7 +248,7 @@ interval:
           condition:
             and:
               - wifi.connected:
-              - lambda: 'return ${dependabot_enabled};'
+              - lambda: 'return id(dependabot_enabled);'
               - lambda: 'return !id(dependabot_disabled);'
               - lambda: 'return id(idle_ui_active);'
           then:
