@@ -16,7 +16,11 @@
       it.filled_rectangle(0, 0, W, 22, Color(20, 20, 40));
       it.print(4, 3, id(font_med), Color(180, 200, 255), "GitHub");
 
-      // battery % (header, between label and CI tally)
+      // battery % (header, between label and CI tally). When running
+      // on external power (is_charging is true) we prefix the reading
+      // with an MDI lightning bolt so it's obvious at a glance that
+      // the device is plugged in. Falls back gracefully when the
+      // binary_sensor has not reported yet (state defaults to false).
       {
         int bl = 0;
         if (!std::isnan(id(battery_level).state)) bl = (int) id(battery_level).state;
@@ -26,7 +30,12 @@
         Color bc = bl < 20 ? Color(255, 80, 80) :
                    bl < 50 ? Color(255, 220, 80) :
                              Color(120, 255, 120);
-        it.print(72, 3, id(font_med), bc, batt);
+        int bx = 72;
+        if (id(is_charging).state) {
+          it.print(bx, 5, id(mdi_status), Color(255, 220, 120), "\U000F0241");
+          bx += 14;
+        }
+        it.print(bx, 3, id(font_med), bc, batt);
       }
 
       // CI tally: right-aligned in the header. Compiled out on

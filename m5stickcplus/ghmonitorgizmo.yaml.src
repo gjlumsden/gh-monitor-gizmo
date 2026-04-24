@@ -280,3 +280,20 @@ sensor:
       if (pct < 0) pct = 0;
       if (pct > 100) pct = 100;
       return pct;
+
+  # Charging state comes from AXP192 register 0x00 (Input power status),
+  # bit 5 = VBUS present. Reference: X-Powers AXP192 datasheet
+  # "REG 00H: Power status" and m5stack/M5Unified Power_Class_AXP192
+  # implementation. Polled every 10 s so the header bolt glyph appears
+  # within one carousel tick of USB insertion.
+  - platform: template
+    name: "Charging"
+    id: is_charging
+    device_class: battery_charging
+    update_interval: 10s
+    lambda: |-
+      uint8_t reg = 0x00;
+      if (id(bus_a)->write(0x34, &reg, 1, false) != i2c::ERROR_OK) return {};
+      uint8_t val = 0;
+      if (id(bus_a)->read(0x34, &val, 1) != i2c::ERROR_OK) return {};
+      return (val & 0x20) != 0;  // bit 5 = VBUS present

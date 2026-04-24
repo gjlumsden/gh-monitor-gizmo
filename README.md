@@ -339,10 +339,13 @@ See [`secrets.yaml.example`](secrets.yaml.example) for the template.
   Copilot usage, Contributions/PR/Issues stats, and rate-limit probe
   run every 10 min; Dependabot alerts every 15 min. Tune via the
   `interval:` blocks; mind the 5000 req/hr user rate limit.
-- Memory tuning lives in `esp32.framework.sdkconfig_options`. Do **not**
-  add `bluetooth_proxy:` – the ESP-IDF HTTP client needs a contiguous
-  allocation that a running BLE stack tends to fragment out of
-  existence.
+- Memory tuning lives in `esp32.framework.sdkconfig_options`. If you
+  need Bluetooth proxying to Home Assistant, use the dedicated
+  `ghmonitorgizmo-s3-ha-btproxy.yaml` variant rather than adding
+  `bluetooth_proxy:` to the default HA build — the btproxy variant
+  ships with the heap/sdkconfig tuning required to keep the ESP-IDF
+  HTTP client's contiguous allocations healthy alongside a running
+  BLE stack.
 - **Idle-UI auto-sleep** – after `idle_screen_off_cycles` complete
   rotations of every available info card, the backlight is turned off,
   the DVD-bouncer animation is paused, and all background polling

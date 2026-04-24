@@ -432,8 +432,15 @@ display:
 # level curve (3300 mV = 0 %, 4100 mV = 100 %) matches the formula in
 # m5stack/M5Unified Power_Class.cpp. Updated every 5 minutes; battery
 # level moves slowly and more frequent PMIC reads just add I2C-bus
-# contention. Charging / VBUS sensors were removed because nothing
-# in the UI consumes them.
+# contention.
+#
+# Charging state comes from M5PM1 register 0x04 (PWR_SRC) bits [2:0]:
+#   0 = 5VIN (USB/DC input), 1 = 5VINOUT (bidirectional), 2 = battery.
+# Values 0 and 1 mean external power is present (device is charging
+# or running from the bus); 2 means running on battery. Reference:
+# m5stack/M5PM1 src/M5PM1.h line 106 (M5PM1_REG_PWR_SRC) and
+# src/M5PM1.cpp line 3227 (getPowerSource). Polled every 10 s so the
+# header icon reflects a plug-in within one carousel tick.
 sensor:
   - platform: template
     name: "Battery Level"
@@ -453,7 +460,20 @@ sensor:
       if (level > 100) level = 100;
       return (float) level;
 
-  # Liveness diagnostics exposed to HA (or web_server on the standalone
+  - platform: template
+    name: "Charging"
+    id: is_charging
+    device_class: battery_charging
+    update_interval: 10s
+    lambda: |-
+      uint8_t reg = 0x04;  // M5PM1_REG_PWR_SRC
+      if (id(bus_a)->write(0x6e, &reg, 1, false) != i2c::ERROR_OK) return {};
+      uint8_t val = 0;
+      if (id(bus_a)->read(0x6e, &val, 1) != i2c::ERROR_OK) return {};
+      // bits [2:0]: 0 = 5VIN, 1 = 5VINOUT, 2 = battery
+      return (val & 0x07) != 2;
+
+  # Liveness diagnostics exposed to HA(or web_server on the standalone
   # variant) so long-term stability can be tracked without tailing
   # the UART. Updated once a minute; the heartbeat log tag "hb" keeps
   # the higher-resolution view.

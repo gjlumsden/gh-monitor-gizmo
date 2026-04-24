@@ -31,4 +31,5 @@ font:
       - "\U000F0453"   # mdi:sync (running)
       - "\U000F012C"   # mdi:check (success)
       - "\U000F0156"   # mdi:close (failed)
+      - "\U000F0241"   # mdi:flash (charging)
 
