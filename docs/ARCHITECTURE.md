@@ -11,7 +11,7 @@ If you only want to flash a pre-built image, the
 
 ## Contents
 
-- [Dual-variant build](#dual-variant-build)
+- [Variant matrix](#variant-matrix)
 - [Paste-and-flash via `dist/`](#paste-and-flash-via-dist)
 - [`build.py` flow](#buildpy-flow)
 - [Feature-gate pattern (substitutions)](#feature-gate-pattern-substitutions)
@@ -21,20 +21,27 @@ If you only want to flash a pre-built image, the
 - [Hardware audits](#hardware-audits)
 - [See also](#see-also)
 
-## Dual-variant build
+## Variant matrix
 
-Every supported device produces **two** flashable artefacts. The two
-variants share 100% of the GitHub polling logic, display code, and UI
-scripts — they differ only in how the device exposes itself on the
-LAN.
+The build produces **five** flashable artefacts. All variants share
+100% of the GitHub polling logic, display code, and UI scripts — they
+differ only in how the device exposes itself on the LAN and (for
+`-ha-btproxy`) whether it also runs as a Bluetooth proxy for Home
+Assistant.
 
-| Variant        | `common/variants/...`             | Exposes                                       | When to choose                                      |
-|----------------|------------------------------------|-----------------------------------------------|-----------------------------------------------------|
-| `-ha`          | `common/variants/ha/api.yaml`      | ESPHome [native API][espapi] (port 6053)      | You already run Home Assistant and want entities    |
-| `-standalone`  | `common/variants/standalone/api.yaml` | ESPHome [web server][espweb] + [captive portal][espcp] | You don't run HA, or you want to flash from a browser only |
+| Variant        | `common/variants/...`                 | Exposes                                                                    | When to choose                                                         |
+|----------------|----------------------------------------|----------------------------------------------------------------------------|------------------------------------------------------------------------|
+| `-ha`          | `common/variants/ha/api.yaml`          | ESPHome [native API][espapi] (port 6053)                                   | You already run Home Assistant and want entities                       |
+| `-standalone`  | `common/variants/standalone/api.yaml`  | ESPHome [web server][espweb] + [captive portal][espcp]                     | You don't run HA, or you want to flash from a browser only             |
+| `-ha-btproxy`  | `common/variants/ha-btproxy/api.yaml`  | ESPHome native API **and** [Bluetooth Proxy][bt-proxy] for HA              | S3 only — you want the gizmo to double as a BT proxy beside its UI     |
 
-The `-ha` variant **requires** a reachable Home Assistant instance to
-receive the published battery / charging / USB-voltage sensors. It
+Only the S3 ships a `-ha-btproxy` variant. The Plus 1.1 is ESP32 and
+this firmware builds it with `CONFIG_BT_ENABLED: n` (no headroom for
+BT alongside the UI stack), so it has no BT-proxy output.
+
+The `-ha` and `-ha-btproxy` variants **require** a reachable Home
+Assistant instance to receive the published battery / charging /
+USB-voltage sensors (and, for BT proxy, the BLE advertisements). They
 will still run without one (the UI works fine), but the native API
 will log repeated connection attempts and you lose the point of the
 variant. Pick `-standalone` if you aren't running HA.
@@ -78,8 +85,8 @@ For each device template (`m5stickcplus/*.yaml.src`,
 2. Replaces each `# !include <relative-path>` with the verbatim
    contents of the referenced fragment under `common/`.
 3. Replaces each `# !include_variant <name>` with the contents of
-   `common/variants/<variant>/<name>` where `<variant>` is `ha` or
-   `standalone`.
+   `common/variants/<variant>/<name>` where `<variant>` is one of
+   `ha`, `standalone`, or `ha-btproxy`.
 4. Writes the flattened document to
    `dist/ghmonitorgizmo-{device}-{variant}.yaml`.
 
@@ -89,7 +96,7 @@ it on every push and fails if a second run produces a different
 output (the build has to be idempotent).
 
 ```powershell
-# Build all four outputs (two devices × two variants)
+# Build all five outputs (see the variant matrix above)
 python build.py
 
 # Build a single source to a custom path
@@ -240,6 +247,7 @@ Both reference the authoritative manufacturer pages:
 [espweb]: https://esphome.io/components/web_server
 [espcp]: https://esphome.io/components/captive_portal
 [espweb-flash]: https://web.esphome.io/
+[bt-proxy]: https://esphome.io/components/bluetooth_proxy.html
 [espsubs]: https://esphome.io/guides/configuration-types.html#substitutions
 [espglobals]: https://esphome.io/components/globals.html
 [gh-dep-rest]: https://docs.github.com/en/rest/dependabot/alerts#list-dependabot-alerts-for-the-authenticated-user

@@ -183,10 +183,10 @@ The firmware ships in two flavours per hardware:
 
 Download the matching YAML from the latest [GitHub Release][releases]:
 
-|                       | Home Assistant (native API)              | Standalone (built-in web UI)                    |
-|-----------------------|------------------------------------------|-------------------------------------------------|
-| **M5StickC Plus 1.1** | `ghmonitorgizmo-cplus-ha.yaml`           | `ghmonitorgizmo-cplus-standalone.yaml`          |
-| **M5Stick S3 (K150)** | `ghmonitorgizmo-s3-ha.yaml`              | `ghmonitorgizmo-s3-standalone.yaml`             |
+|                       | Home Assistant (native API)              | Standalone (built-in web UI)                    | HA + Bluetooth proxy                            |
+|-----------------------|------------------------------------------|-------------------------------------------------|-------------------------------------------------|
+| **M5StickC Plus 1.1** | `ghmonitorgizmo-cplus-ha.yaml`           | `ghmonitorgizmo-cplus-standalone.yaml`          | *(unavailable — ESP32 has no BT radio headroom)* |
+| **M5Stick S3 (K150)** | `ghmonitorgizmo-s3-ha.yaml`              | `ghmonitorgizmo-s3-standalone.yaml`             | `ghmonitorgizmo-s3-ha-btproxy.yaml`             |
 
 ### 2. Create a GitHub token
 
@@ -459,7 +459,7 @@ can install directly (no `packages:` / `!include` support required on
 the install side).
 
 ```powershell
-# build every device-variant (four outputs)
+# build every device-variant (five outputs: Plus ha/standalone, S3 ha/standalone/ha-btproxy)
 python build.py
 
 # build a single source to a custom output
@@ -475,7 +475,7 @@ For editing the YAML locally, the
 [ESPHome VS Code extension][vscode-ext] is very useful – it gives you
 schema validation, autocomplete, and inline docs for every component.
 
-Deeper internals — the dual-variant build, `build.py` pipeline,
+Deeper internals — the variant matrix, `build.py` pipeline,
 substitution-based feature-gate pattern, Dependabot REST quirks, and
 night-mode beep suppression — live in
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
@@ -497,6 +497,13 @@ night-mode beep suppression — live in
   [#9](https://github.com/gjlumsden/gh-monitor-gizmo/issues/9) (packages migration),
   [#10](https://github.com/gjlumsden/gh-monitor-gizmo/issues/10) (BT-proxy variant),
   [#11](https://github.com/gjlumsden/gh-monitor-gizmo/issues/11) (end-to-end validation)
+
+## Contributing
+
+Editing the firmware? See [CONTRIBUTING.md](CONTRIBUTING.md) for the
+repo layout, `build.py` workflow, variant matrix, and PR
+expectations. Runtime design notes live in
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Licence
 

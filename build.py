@@ -123,6 +123,18 @@ def main(argv: list[str] | None = None) -> int:
             dst = root / "dist" / stem
         build(src, dst, args.variant, root)
     else:
+        # Full rebuild: remove stale outputs from previous builds so
+        # renamed or removed variants don't linger in dist/. Only touch
+        # files matching the ghmonitorgizmo-*.yaml output pattern so
+        # user-provided files in dist/ (e.g. a local secrets.yaml) are
+        # preserved.
+        dist = root / "dist"
+        if dist.is_dir():
+            keep = {(root / d).resolve() for _, d, _ in DEVICES}
+            for stale in sorted(dist.glob("ghmonitorgizmo-*.yaml")):
+                if stale.resolve() not in keep:
+                    stale.unlink()
+                    print(f"removed stale {stale.relative_to(root)}")
         for s, d, v in DEVICES:
             build(root / s, root / d, v, root)
     return 0
